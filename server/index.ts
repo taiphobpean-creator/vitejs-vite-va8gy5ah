@@ -1,6 +1,6 @@
-import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
+import express from "express";
+import { createServer } from "http";
+import { Server } from "socket.io";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -10,18 +10,14 @@ type Player = {
   totalChip: number;
 };
 
-const room: Room = {
-  code,
-  hostId: socket.id,
-  multiplier: Number(data.multiplier) || 1,
-  status: "waiting",
-  players: [
-    {
-      id: socket.id,
-      name: data.name || "Player",
-      totalChip: 0
-    }
-  ]
+type RoomStatus = "waiting" | "playing";
+
+type Room = {
+  code: string;
+  hostId: string;
+  multiplier: number;
+  status: RoomStatus;
+  players: Player[];
 };
 
 const app = express();
@@ -29,30 +25,51 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
+    origin: "*",
+    methods: ["GET", "POST"],
   },
 });
 
 const rooms = new Map<string, Room>();
 
-function createRoomCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+// ==========================================
+// CREATE ROOM CODE
+// ==========================================
 
-  let result = '';
+function createRoomCode() {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+  let result = "";
 
   for (let i = 0; i < 4; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
+    result +=
+      chars[
+        Math.floor(
+          Math.random() * chars.length
+        )
+      ];
   }
 
   return result;
 }
 
-io.on('connection', (socket) => {
-  console.log('🟢 Connected:', socket.id);
+// ==========================================
+// SOCKET
+// ==========================================
+
+io.on("connection", (socket) => {
+  console.log(
+    "🟢 Connected:",
+    socket.id
+  );
+
+  // ========================================
+  // CREATE ROOM
+  // ========================================
 
   socket.on(
-    'create-room',
+    "create-room",
     (
       data: {
         name: string;
@@ -66,14 +83,24 @@ io.on('connection', (socket) => {
         code = createRoomCode();
       }
 
+      const playerName =
+        data.name?.trim() || "Player";
+
+      const multiplier =
+        Number(data.multiplier) || 1;
+
       const room: Room = {
         code,
         hostId: socket.id,
-        multiplier: Number(data.multiplier) || 1,
+
+        multiplier,
+
+        status: "waiting",
+
         players: [
           {
             id: socket.id,
-            name: data.name || 'Player',
+            name: playerName,
             totalChip: 0,
           },
         ],
@@ -83,17 +110,28 @@ io.on('connection', (socket) => {
 
       socket.join(code);
 
+      console.log(
+        `🏠 Room created: ${code}`
+      );
+
       callback({
         ok: true,
         room,
       });
 
-      io.to(code).emit('room-update', room);
+      io.to(code).emit(
+        "room-update",
+        room
+      );
     }
   );
 
+  // ========================================
+  // JOIN ROOM
+  // ========================================
+
   socket.on(
-    'join-room',
+    "join-room",
     (
       data: {
         name: string;
@@ -101,146 +139,306 @@ io.on('connection', (socket) => {
       },
       callback
     ) => {
-      const code = data.code.toUpperCase();
-      const room = rooms.get(code);
+      const code =
+        data.code
+          ?.trim()
+          .toUpperCase() || "";
+
+      const room =
+        rooms.get(code);
 
       if (!room) {
         callback({
           ok: false,
-          message: 'ไม่พบห้อง',
+          message: "ไม่พบห้อง",
         });
 
         return;
       }
 
-      if (room.players.length >= 8) {
+      if (
+        room.status !== "waiting"
+      ) {
         callback({
           ok: false,
-          message: 'ห้องเต็มแล้ว',
+          message:
+            "เกมเริ่มไปแล้ว ไม่สามารถเข้าห้องได้",
         });
 
         return;
       }
 
-      room.players.push({
-        id: socket.id,
-        name: data.name || 'Player',
-        totalChip: 0,
-      });
+      if (
+        room.players.length >= 8
+      ) {
+        callback({
+          ok: false,
+          message: "ห้องเต็มแล้ว",
+        });
+
+        return;
+      }
+
+      // ป้องกัน socket เดิมเข้าซ้ำ
+      const alreadyJoined =
+        room.players.some(
+          (player) =>
+            player.id === socket.id
+        );
+
+      if (!alreadyJoined) {
+        room.players.push({
+          id: socket.id,
+          name:
+            data.name?.trim() ||
+            "Player",
+          totalChip: 0,
+        });
+      }
 
       socket.join(code);
+
+      console.log(
+        `👤 ${data.name} joined ${code}`
+      );
 
       callback({
         ok: true,
         room,
       });
 
-      io.to(code).emit('room-update', room);
+      io.to(code).emit(
+        "room-update",
+        room
+      );
     }
   );
-socket.on(
-  "start-game",
-  (
-    data: { code: string },
-    callback
-  ) => {
-    const room = rooms.get(
-      data.code.toUpperCase()
-    );
 
-    if (!room) {
-      callback({
-        ok: false,
-        message: "ไม่พบห้อง"
-      });
+  // ========================================
+  // START GAME
+  // ========================================
 
-      return;
-    }
+  socket.on(
+    "start-game",
+    (
+      data: {
+        code: string;
+      },
+      callback
+    ) => {
+      const code =
+        data.code
+          ?.trim()
+          .toUpperCase() || "";
 
-    if (room.hostId !== socket.id) {
-      callback({
-        ok: false,
-        message: "เฉพาะ Host เท่านั้นที่เริ่มเกมได้"
-      });
+      const room =
+        rooms.get(code);
 
-      return;
-    }
+      if (!room) {
+        callback({
+          ok: false,
+          message: "ไม่พบห้อง",
+        });
 
-    if (room.players.length < 2) {
-      callback({
-        ok: false,
-        message: "ต้องมีอย่างน้อย 2 คน"
-      });
-
-      return;
-    }
-
-    room.status = "playing";
-
-    io.to(room.code).emit(
-      "room-update",
-      room
-    );
-
-    io.to(room.code).emit(
-      "game-started",
-      {
-        message: "เกมเริ่มแล้ว"
+        return;
       }
-    );
 
-    callback({
-      ok: true
+      // เฉพาะ Host
+      if (
+        room.hostId !== socket.id
+      ) {
+        callback({
+          ok: false,
+          message:
+            "เฉพาะ Host เท่านั้นที่เริ่มเกมได้",
+        });
+
+        return;
+      }
+
+      // ต้องมีอย่างน้อย 2 คน
+      if (
+        room.players.length < 2
+      ) {
+        callback({
+          ok: false,
+          message:
+            "ต้องมีผู้เล่นอย่างน้อย 2 คน",
+        });
+
+        return;
+      }
+
+      if (
+        room.status === "playing"
+      ) {
+        callback({
+          ok: false,
+          message:
+            "เกมเริ่มไปแล้ว",
+        });
+
+        return;
+      }
+
+      room.status = "playing";
+
+      console.log(
+        `🎮 Game started: ${code}`
+      );
+
+      // ส่ง state ใหม่ให้ทุกคน
+      io.to(code).emit(
+        "room-update",
+        room
+      );
+
+      // Event สำหรับอนาคต
+      io.to(code).emit(
+        "game-started",
+        {
+          roomCode: code,
+          message: "เกมเริ่มแล้ว",
+        }
+      );
+
+      callback({
+        ok: true,
+      });
+    }
+  );
+
+  // ========================================
+  // DISCONNECT
+  // ========================================
+
+  socket.on(
+    "disconnect",
+    () => {
+      console.log(
+        "🔴 Disconnected:",
+        socket.id
+      );
+
+      for (
+        const [code, room]
+        of rooms
+      ) {
+        const index =
+          room.players.findIndex(
+            (player) =>
+              player.id ===
+              socket.id
+          );
+
+        if (index === -1) {
+          continue;
+        }
+
+        room.players.splice(
+          index,
+          1
+        );
+
+        // ไม่มีผู้เล่นเหลือ
+        if (
+          room.players.length === 0
+        ) {
+          rooms.delete(code);
+
+          console.log(
+            `🗑️ Room deleted: ${code}`
+          );
+
+          continue;
+        }
+
+        // Host หลุด
+        if (
+          room.hostId === socket.id
+        ) {
+          room.hostId =
+            room.players[0].id;
+
+          console.log(
+            `👑 New host: ${room.players[0].name}`
+          );
+        }
+
+        io.to(code).emit(
+          "room-update",
+          room
+        );
+      }
+    }
+  );
+});
+
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+
+app.get(
+  "/health",
+  (_, res) => {
+    res.json({
+      ok: true,
+      game: "31 Scat",
+      rooms: rooms.size,
     });
   }
 );
-  socket.on('disconnect', () => {
-    console.log('🔴 Disconnected:', socket.id);
 
-    for (const [code, room] of rooms) {
-      const index = room.players.findIndex((player) => player.id === socket.id);
+// ==========================================
+// SERVE REACT BUILD
+// ==========================================
 
-      if (index === -1) continue;
+const __filename =
+  fileURLToPath(
+    import.meta.url
+  );
 
-      room.players.splice(index, 1);
+const __dirname =
+  path.dirname(__filename);
 
-      if (room.players.length === 0) {
-        rooms.delete(code);
-        continue;
-      }
+const distPath =
+  path.join(
+    __dirname,
+    "../dist"
+  );
 
-      if (room.hostId === socket.id) {
-        room.hostId = room.players[0].id;
-      }
-
-      io.to(code).emit('room-update', room);
-    }
-  });
-});
-
-app.get('/health', (_, res) => {
-  res.json({
-    ok: true,
-    game: '31 Scat',
-  });
-});
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const distPath = path.join(__dirname, "../dist");
-
-app.use(express.static(distPath));
+app.use(
+  express.static(distPath)
+);
 
 app.get("*", (_, res) => {
   res.sendFile(
-    path.join(distPath, "index.html")
+    path.join(
+      distPath,
+      "index.html"
+    )
   );
 });
-const PORT = Number(process.env.PORT) || 3001;
 
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log('');
-  console.log('🃏 31 Scat Server');
-  console.log(`🚀 http://localhost:${PORT}`);
-  console.log('');
-});
+// ==========================================
+// START SERVER
+// ==========================================
+
+const PORT =
+  Number(process.env.PORT) ||
+  3001;
+
+httpServer.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log("");
+    console.log(
+      "🃏 31 Scat Server"
+    );
+    console.log(
+      `🚀 http://localhost:${PORT}`
+    );
+    console.log("");
+  }
+);
