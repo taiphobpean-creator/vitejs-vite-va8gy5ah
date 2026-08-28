@@ -1042,9 +1042,63 @@ input {
 }
 
 .final-banner {
-  background: #6f471c;
+  max-width: 760px;
 
-  color: #ffd276;
+  margin:
+    0 auto 15px;
+
+  padding: 14px 18px;
+
+  text-align: center;
+
+  border-radius: 12px;
+
+  font-size: 16px;
+
+  font-weight: 900;
+
+  letter-spacing: 1.5px;
+
+  background: #a50000;
+
+  color: #ffffff;
+
+  border:
+    2px solid #ff4d4d;
+
+  box-shadow:
+    0 0 18px rgba(255, 0, 0, 0.75);
+
+  animation:
+    finalRoundFlash
+    0.9s
+    infinite;
+}
+
+@keyframes finalRoundFlash {
+  0%,
+  100% {
+    background: #8d0000;
+
+    color: #ffffff;
+
+    transform: scale(1);
+
+    box-shadow:
+      0 0 10px rgba(255, 0, 0, 0.45);
+  }
+
+  50% {
+    background: #ff1f1f;
+
+    color: #fff7a8;
+
+    transform: scale(1.025);
+
+    box-shadow:
+      0 0 30px rgba(255, 0, 0, 1),
+      0 0 60px rgba(255, 50, 50, 0.5);
+  }
 }
 
 .join-midround-banner {
