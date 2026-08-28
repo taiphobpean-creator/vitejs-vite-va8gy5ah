@@ -10,11 +10,18 @@ type Player = {
   totalChip: number;
 };
 
-type Room = {
-  code: string;
-  hostId: string;
-  multiplier: number;
-  players: Player[];
+const room: Room = {
+  code,
+  hostId: socket.id,
+  multiplier: Number(data.multiplier) || 1,
+  status: "waiting",
+  players: [
+    {
+      id: socket.id,
+      name: data.name || "Player",
+      totalChip: 0
+    }
+  ]
 };
 
 const app = express();
@@ -131,7 +138,62 @@ io.on('connection', (socket) => {
       io.to(code).emit('room-update', room);
     }
   );
+socket.on(
+  "start-game",
+  (
+    data: { code: string },
+    callback
+  ) => {
+    const room = rooms.get(
+      data.code.toUpperCase()
+    );
 
+    if (!room) {
+      callback({
+        ok: false,
+        message: "ไม่พบห้อง"
+      });
+
+      return;
+    }
+
+    if (room.hostId !== socket.id) {
+      callback({
+        ok: false,
+        message: "เฉพาะ Host เท่านั้นที่เริ่มเกมได้"
+      });
+
+      return;
+    }
+
+    if (room.players.length < 2) {
+      callback({
+        ok: false,
+        message: "ต้องมีอย่างน้อย 2 คน"
+      });
+
+      return;
+    }
+
+    room.status = "playing";
+
+    io.to(room.code).emit(
+      "room-update",
+      room
+    );
+
+    io.to(room.code).emit(
+      "game-started",
+      {
+        message: "เกมเริ่มแล้ว"
+      }
+    );
+
+    callback({
+      ok: true
+    });
+  }
+);
   socket.on('disconnect', () => {
     console.log('🔴 Disconnected:', socket.id);
 
