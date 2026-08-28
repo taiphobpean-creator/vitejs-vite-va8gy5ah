@@ -1,27 +1,19 @@
 import express from "express";
 import { createServer } from "http";
 import { Server, Socket } from "socket.io";
-
 import path from "path";
-
-import {
-  fileURLToPath,
-} from "url";
-
+import { fileURLToPath } from "url";
 import crypto from "crypto";
 
 // ======================================================
 // CONFIG
 // ======================================================
 
-const RECONNECT_GRACE_MS =
-  5 * 60 * 1000;
-
-const EMOJI_COOLDOWN_MS =
-  400;
-
-const EMOJI_MAX_PER_ROUND =
-  10;
+const RECONNECT_GRACE_MS = 5 * 60 * 1000;
+const EMOJI_COOLDOWN_MS = 400;
+const EMOJI_MAX_PER_ROUND = 10;
+const MAX_CHAT_MESSAGES = 50;
+const MAX_CHAT_LENGTH = 200;
 
 const ALLOWED_EMOJIS = [
   "😂",
@@ -40,11 +32,7 @@ const ALLOWED_EMOJIS = [
 // TYPES
 // ======================================================
 
-type Suit =
-  | "♠"
-  | "♥"
-  | "♦"
-  | "♣";
+type Suit = "♠" | "♥" | "♦" | "♣";
 
 type Rank =
   | "A"
@@ -75,21 +63,15 @@ type Card = {
 
 type Player = {
   id: string;
-
   name: string;
 
   token: string;
 
-  socketId:
-    | string
-    | null;
+  socketId: string | null;
 
-  status:
-    PlayerStatus;
+  status: PlayerStatus;
 
-  disconnectedAt:
-    | number
-    | null;
+  disconnectedAt: number | null;
 
   totalChip: number;
 };
@@ -116,20 +98,21 @@ type RoundResult = {
     | "knock"
     | "initial-trip";
 
-  scores:
-    Record<
-      string,
-      number
-    >;
+  scores: Record<string, number>;
 
-  roundNet:
-    Record<
-      string,
-      number
-    >;
+  roundNet: Record<string, number>;
 
-  settlements:
-    SettlementLine[];
+  settlements: SettlementLine[];
+
+  finalHands: Record<
+    string,
+    Card[]
+  >;
+
+  discardHistoryByPlayer: Record<
+    string,
+    Card[]
+  >;
 };
 
 type GameState = {
@@ -140,136 +123,122 @@ type GameState = {
     | "final-round"
     | "showdown";
 
-  activePlayerIds:
-    string[];
+  activePlayerIds: string[];
 
   starterId: string;
 
-  deck:
-    Card[];
+  deck: Card[];
 
-  discardPile:
-    Card[];
+  discardPile: Card[];
 
-  hands:
-    Record<
-      string,
-      Card[]
-    >;
+  hands: Record<
+    string,
+    Card[]
+  >;
 
-  currentPlayerId:
-    | string
-    | null;
+  discardHistoryByPlayer: Record<
+    string,
+    Card[]
+  >;
+
+  currentPlayerId: string | null;
 
   hasDrawn: boolean;
 
-  knockedBy:
-    | string
-    | null;
+  knockedBy: string | null;
 
-  finalTurnsRemaining:
-    string[];
+  finalTurnsRemaining: string[];
 
-  initialTripPlayers:
-    string[];
+  initialTripPlayers: string[];
 
-  result:
-    | RoundResult
-    | null;
+  result: RoundResult | null;
 };
 
-type Ledger =
-  Record<
-    string,
-    Record<
-      string,
-      number
-    >
-  >;
+type Ledger = Record<
+  string,
+  Record<string, number>
+>;
 
-type EmojiUsage =
-  Record<
-    string,
-    {
-      count: number;
-      lastAt: number;
-    }
-  >;
+type EmojiUsage = Record<
+  string,
+  {
+    count: number;
+    lastAt: number;
+  }
+>;
+
+type ChatMessage = {
+  id: string;
+
+  playerId: string;
+
+  name: string;
+
+  message: string;
+
+  createdAt: number;
+};
 
 type Room = {
   code: string;
 
   hostId: string;
 
-  multiplier:
-    number;
+  multiplier: number;
 
   status:
     | "waiting"
     | "playing"
     | "ended";
 
-  players:
-    Player[];
+  players: Player[];
 
-  game:
-    | GameState
-    | null;
+  game: GameState | null;
 
-  ledger:
-    Ledger;
+  ledger: Ledger;
 
-  history:
-    RoundResult[];
+  history: RoundResult[];
 
-  emojiUsage:
-    EmojiUsage;
+  emojiUsage: EmojiUsage;
+
+  chatMessages: ChatMessage[];
 };
 
 // ======================================================
 // SERVER
 // ======================================================
 
-const app =
-  express();
+const app = express();
 
 const httpServer =
   createServer(app);
 
-const io =
-  new Server(
-    httpServer,
-    {
-      cors: {
-        origin: "*",
+const io = new Server(
+  httpServer,
+  {
+    cors: {
+      origin: "*",
+      methods: [
+        "GET",
+        "POST",
+      ],
+    },
 
-        methods: [
-          "GET",
-          "POST",
-        ],
-      },
+    connectionStateRecovery: {
+      maxDisconnectionDuration:
+        RECONNECT_GRACE_MS,
 
-      connectionStateRecovery: {
-        maxDisconnectionDuration:
-          RECONNECT_GRACE_MS,
+      skipMiddlewares: true,
+    },
 
-        skipMiddlewares:
-          true,
-      },
+    pingInterval: 25000,
 
-      pingInterval:
-        25000,
-
-      pingTimeout:
-        20000,
-    }
-  );
+    pingTimeout: 20000,
+  }
+);
 
 const rooms =
-  new Map<
-    string,
-    Room
-  >();
+  new Map<string, Room>();
 
 const disconnectTimers =
   new Map<
@@ -297,37 +266,33 @@ function createToken() {
 // CARDS
 // ======================================================
 
-const suits:
-  Suit[] = [
-    "♠",
-    "♥",
-    "♦",
-    "♣",
-  ];
+const suits: Suit[] = [
+  "♠",
+  "♥",
+  "♦",
+  "♣",
+];
 
-const ranks:
-  Rank[] = [
-    "A",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "10",
-    "J",
-    "Q",
-    "K",
-  ];
+const ranks: Rank[] = [
+  "A",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "J",
+  "Q",
+  "K",
+];
 
 function rankValue(
   rank: Rank
 ) {
-  if (
-    rank === "A"
-  ) {
+  if (rank === "A") {
     return 11;
   }
 
@@ -339,36 +304,20 @@ function rankValue(
     return 10;
   }
 
-  return Number(
-    rank
-  );
+  return Number(rank);
 }
 
-function createDeck():
-  Card[] {
-  const deck:
-    Card[] = [];
+function createDeck(): Card[] {
+  const deck: Card[] = [];
 
-  for (
-    const suit
-    of suits
-  ) {
-    for (
-      const rank
-      of ranks
-    ) {
+  for (const suit of suits) {
+    for (const rank of ranks) {
       deck.push({
-        id:
-          createId(),
-
+        id: createId(),
         suit,
-
         rank,
-
         value:
-          rankValue(
-            rank
-          ),
+          rankValue(rank),
       });
     }
   }
@@ -377,14 +326,13 @@ function createDeck():
 }
 
 function shuffle<T>(
-  data: T[]
-) {
-  const copy =
-    [...data];
+  items: T[]
+): T[] {
+  const result = [...items];
 
   for (
     let i =
-      copy.length - 1;
+      result.length - 1;
     i > 0;
     i--
   ) {
@@ -395,15 +343,15 @@ function shuffle<T>(
       );
 
     [
-      copy[i],
-      copy[j],
+      result[i],
+      result[j],
     ] = [
-      copy[j],
-      copy[i],
+      result[j],
+      result[i],
     ];
   }
 
-  return copy;
+  return result;
 }
 
 // ======================================================
@@ -413,10 +361,7 @@ function shuffle<T>(
 function isThreeOfKind(
   hand: Card[]
 ) {
-  if (
-    hand.length !==
-    3
-  ) {
+  if (hand.length !== 3) {
     return false;
   }
 
@@ -432,34 +377,27 @@ function calculateScore(
   initialHand = false
 ) {
   if (
-    isThreeOfKind(
-      hand
-    )
+    isThreeOfKind(hand)
   ) {
     return initialHand
       ? 31
       : 30.5;
   }
 
-  const totals:
-    Record<
-      Suit,
-      number
-    > = {
-      "♠": 0,
-      "♥": 0,
-      "♦": 0,
-      "♣": 0,
-    };
+  const totals: Record<
+    Suit,
+    number
+  > = {
+    "♠": 0,
+    "♥": 0,
+    "♦": 0,
+    "♣": 0,
+  };
 
-  for (
-    const card
-    of hand
-  ) {
+  for (const card of hand) {
     totals[
       card.suit
-    ] +=
-      card.value;
+    ] += card.value;
   }
 
   return Math.max(
@@ -497,7 +435,7 @@ function createRoomCode() {
 }
 
 // ======================================================
-// PLAYER
+// PLAYER HELPERS
 // ======================================================
 
 function findPlayer(
@@ -507,10 +445,8 @@ function findPlayer(
   return (
     room.players.find(
       (player) =>
-        player.id ===
-        id
-    ) ||
-    null
+        player.id === id
+    ) || null
   );
 }
 
@@ -523,8 +459,7 @@ function getSocketPlayer(
       (player) =>
         player.socketId ===
         socket.id
-    ) ||
-    null
+    ) || null
   );
 }
 
@@ -542,9 +477,7 @@ function findBySocket(
           socketId
       );
 
-    if (
-      player
-    ) {
+    if (player) {
       return {
         room,
         player,
@@ -558,21 +491,17 @@ function findBySocket(
 function livePlayers(
   room: Room
 ) {
-  return (
-    room.players.filter(
-      (player) =>
-        player.status !==
-        "LEFT"
-    )
+  return room.players.filter(
+    (player) =>
+      player.status !==
+      "LEFT"
   );
 }
 
 function activePlayers(
   room: Room
 ) {
-  if (
-    !room.game
-  ) {
+  if (!room.game) {
     return [];
   }
 
@@ -589,42 +518,23 @@ function activePlayers(
       (
         player
       ): player is Player =>
-        player !==
-        null
+        player !== null
     );
 }
 
 function chooseNewHost(
   room: Room
 ) {
-  const active =
+  const next =
     room.players.find(
       (player) =>
-        player.status ===
-        "ACTIVE"
+        player.status !==
+        "LEFT"
     );
 
-  if (
-    active
-  ) {
+  if (next) {
     room.hostId =
-      active.id;
-
-    return;
-  }
-
-  const reconnecting =
-    room.players.find(
-      (player) =>
-        player.status ===
-        "RECONNECTING"
-    );
-
-  if (
-    reconnecting
-  ) {
-    room.hostId =
-      reconnecting.id;
+      next.id;
   }
 }
 
@@ -662,15 +572,9 @@ function ensureLedger(
 
 function updateLedger(
   room: Room,
-
-  winnerId:
-    string,
-
-  loserId:
-    string,
-
-  chips:
-    number
+  winnerId: string,
+  loserId: string,
+  chips: number
 ) {
   ensureLedger(
     room,
@@ -684,13 +588,11 @@ function updateLedger(
 
   room.ledger[
     winnerId
-  ][loserId] +=
-    chips;
+  ][loserId] += chips;
 
   room.ledger[
     loserId
-  ][winnerId] -=
-    chips;
+  ][winnerId] -= chips;
 }
 
 // ======================================================
@@ -714,9 +616,7 @@ function determineNextStarter(
     ];
 
   const candidates =
-    livePlayers(
-      room
-    ).filter(
+    livePlayers(room).filter(
       (player) =>
         previous.scores[
           player.id
@@ -746,13 +646,11 @@ function determineNextStarter(
       (player) =>
         previous.scores[
           player.id
-        ] ===
-        highest
+        ] === highest
     );
 
   if (
-    tied.length ===
-    1
+    tied.length === 1
   ) {
     return tied[0].id;
   }
@@ -778,8 +676,7 @@ function determineNextStarter(
               player.id
             ]?.[
               opponent.id
-            ] ||
-            0;
+            ] || 0;
         }
 
         return {
@@ -810,19 +707,20 @@ function determineNextStarter(
       );
 
   if (
-    tied.length ===
-    1
+    tied.length === 1
   ) {
     return tied[0].id;
   }
 
+  // ถ้ายังเสมอ
+  // ใช้ลำดับที่นั่งใน room.players
   for (
     const player
-    of livePlayers(
-      room
-    )
+    of room.players
   ) {
     if (
+      player.status !==
+        "LEFT" &&
       tied.some(
         (item) =>
           item.id ===
@@ -844,8 +742,7 @@ function publicRoom(
   room: Room
 ) {
   return {
-    code:
-      room.code,
+    code: room.code,
 
     hostId:
       room.hostId,
@@ -862,8 +759,7 @@ function publicRoom(
     players:
       room.players.map(
         (player) => ({
-          id:
-            player.id,
+          id: player.id,
 
           name:
             player.name,
@@ -884,6 +780,9 @@ function publicRoom(
 
     history:
       room.history,
+
+    chatMessages:
+      room.chatMessages,
   };
 }
 
@@ -898,14 +797,10 @@ function sendState(
     room.code
   ).emit(
     "room-update",
-    publicRoom(
-      room
-    )
+    publicRoom(room)
   );
 
-  if (
-    !room.game
-  ) {
+  if (!room.game) {
     return;
   }
 
@@ -916,8 +811,7 @@ function sendState(
     game.discardPile[
       game.discardPile.length -
         1
-    ] ||
-    null;
+    ] || null;
 
   for (
     const player
@@ -936,9 +830,7 @@ function sendState(
         player.socketId
       );
 
-    if (
-      !client
-    ) {
+    if (!client) {
       continue;
     }
 
@@ -957,8 +849,7 @@ function sendState(
         hand:
           game.hands[
             player.id
-          ] ||
-          [],
+          ] || [],
 
         activeInRound:
           game.activePlayerIds.includes(
@@ -970,7 +861,9 @@ function sendState(
             .filter(
               (other) =>
                 other.id !==
-                player.id
+                  player.id &&
+                other.status !==
+                  "LEFT"
             )
             .map(
               (other) => ({
@@ -994,8 +887,7 @@ function sendState(
                 cardCount:
                   game.hands[
                     other.id
-                  ]?.length ||
-                  0,
+                  ]?.length || 0,
               })
             ),
 
@@ -1022,16 +914,17 @@ function sendState(
         result:
           game.result,
 
+        discardHistoryByPlayer:
+          game.discardHistoryByPlayer,
+
         emojiRemaining:
           Math.max(
             0,
-
             EMOJI_MAX_PER_ROUND -
               (
                 room.emojiUsage[
                   player.id
-                ]?.count ||
-                0
+                ]?.count || 0
               )
           ),
       }
@@ -1045,42 +938,32 @@ function sendState(
 
 function settleRound(
   room: Room,
-
   reason:
-    RoundResult[
-      "reason"
-    ]
+    RoundResult["reason"]
 ) {
   const game =
     room.game;
 
-  if (
-    !game
-  ) {
+  if (!game) {
     return;
   }
 
-  // เฉพาะคนที่เล่นรอบนี้จริง
   const players =
-    activePlayers(
-      room
-    ).filter(
+    activePlayers(room).filter(
       (player) =>
         player.status !==
         "LEFT"
     );
 
-  const scores:
-    Record<
-      string,
-      number
-    > = {};
+  const scores: Record<
+    string,
+    number
+  > = {};
 
-  const roundNet:
-    Record<
-      string,
-      number
-    > = {};
+  const roundNet: Record<
+    string,
+    number
+  > = {};
 
   for (
     const player
@@ -1089,8 +972,7 @@ function settleRound(
     const hand =
       game.hands[
         player.id
-      ] ||
-      [];
+      ] || [];
 
     const initialTrip =
       game
@@ -1114,8 +996,7 @@ function settleRound(
   }
 
   const settlements:
-    SettlementLine[] =
-      [];
+    SettlementLine[] = [];
 
   for (
     let i = 0;
@@ -1226,22 +1107,69 @@ function settleRound(
     }
   }
 
+  // Snapshot ไพ่ทั้งหมดตอนจบรอบ
+  const finalHands: Record<
+    string,
+    Card[]
+  > = {};
+
+  const finalDiscardHistory:
+    Record<
+      string,
+      Card[]
+    > = {};
+
+  for (
+    const player
+    of players
+  ) {
+    finalHands[
+      player.id
+    ] = (
+      game.hands[
+        player.id
+      ] || []
+    ).map(
+      (card) => ({
+        ...card,
+      })
+    );
+
+    finalDiscardHistory[
+      player.id
+    ] = (
+      game
+        .discardHistoryByPlayer[
+        player.id
+      ] || []
+    ).map(
+      (card) => ({
+        ...card,
+      })
+    );
+  }
+
   const result:
     RoundResult = {
-      roundNumber:
-        game.roundNumber,
+    roundNumber:
+      game.roundNumber,
 
-      starterId:
-        game.starterId,
+    starterId:
+      game.starterId,
 
-      reason,
+    reason,
 
-      scores,
+    scores,
 
-      roundNet,
+    roundNet,
 
-      settlements,
-    };
+    settlements,
+
+    finalHands,
+
+    discardHistoryByPlayer:
+      finalDiscardHistory,
+  };
 
   room.history.push(
     result
@@ -1259,9 +1187,7 @@ function settleRound(
   game.result =
     result;
 
-  sendState(
-    room
-  );
+  sendState(room);
 }
 
 // ======================================================
@@ -1272,21 +1198,44 @@ function startRound(
   room: Room,
 
   options: {
-    roundNumber?:
-      number;
+    roundNumber?: number;
 
-    starterId?:
-      string;
+    starterId?: string;
+
+    playerIds?: string[];
   } = {}
 ) {
-  const players =
-    livePlayers(
-      room
-    );
+  let players: Player[];
 
   if (
-    players.length <
-    2
+    options.playerIds
+  ) {
+    players =
+      options.playerIds
+        .map(
+          (id) =>
+            findPlayer(
+              room,
+              id
+            )
+        )
+        .filter(
+          (
+            player
+          ): player is Player =>
+            Boolean(
+              player &&
+              player.status !==
+                "LEFT"
+            )
+        );
+  } else {
+    players =
+      livePlayers(room);
+  }
+
+  if (
+    players.length < 2
   ) {
     room.status =
       "waiting";
@@ -1294,14 +1243,12 @@ function startRound(
     room.game =
       null;
 
-    sendState(
-      room
-    );
+    sendState(room);
 
     return;
   }
 
-  let deck =
+  const deck =
     shuffle(
       createDeck()
     );
@@ -1312,8 +1259,7 @@ function startRound(
         player.id
     );
 
-  let starterId:
-    string;
+  let starterId: string;
 
   if (
     options.starterId &&
@@ -1345,23 +1291,30 @@ function startRound(
       ids[0];
   }
 
-  const index =
+  const starterIndex =
     ids.indexOf(
       starterId
     );
 
+  // เริ่มจาก Starter
+  // แต่ยังรักษาลำดับที่นั่งแบบวงกลม
   const orderedIds = [
     ...ids.slice(
-      index
+      starterIndex
     ),
 
     ...ids.slice(
       0,
-      index
+      starterIndex
     ),
   ];
 
-  const hands:
+  const hands: Record<
+    string,
+    Card[]
+  > = {};
+
+  const discardHistoryByPlayer:
     Record<
       string,
       Card[]
@@ -1372,9 +1325,13 @@ function startRound(
     of orderedIds
   ) {
     hands[id] = [];
+
+    discardHistoryByPlayer[
+      id
+    ] = [];
   }
 
-  // แจกทีละใบ 3 รอบ
+  // แจก 3 ใบ
   for (
     let round = 0;
     round < 3;
@@ -1387,12 +1344,8 @@ function startRound(
       const card =
         deck.pop();
 
-      if (
-        card
-      ) {
-        hands[
-          id
-        ].push(
+      if (card) {
+        hands[id].push(
           card
         );
       }
@@ -1407,26 +1360,28 @@ function startRound(
         )
     );
 
+  const lastHistoryRound =
+    room.history[
+      room.history.length -
+        1
+    ]?.roundNumber || 0;
+
   const roundNumber =
     options.roundNumber ??
     (
-      (
-        room.game
-          ?.roundNumber ||
-        room.history[
-          room.history.length -
-            1
-        ]?.roundNumber ||
-        0
-      ) +
-      1
+      room.game
+        ?.roundNumber
+        ? room.game
+            .roundNumber +
+          1
+        : lastHistoryRound +
+          1
     );
 
   room.status =
     "playing";
 
-  room.emojiUsage =
-    {};
+  room.emojiUsage = {};
 
   for (
     const player
@@ -1436,7 +1391,6 @@ function startRound(
       player.id
     ] = {
       count: 0,
-
       lastAt: 0,
     };
   }
@@ -1454,19 +1408,18 @@ function startRound(
 
     deck,
 
-    discardPile:
-      [],
+    discardPile: [],
 
     hands,
+
+    discardHistoryByPlayer,
 
     currentPlayerId:
       starterId,
 
-    hasDrawn:
-      false,
+    hasDrawn: false,
 
-    knockedBy:
-      null,
+    knockedBy: null,
 
     finalTurnsRemaining:
       [],
@@ -1474,8 +1427,7 @@ function startRound(
     initialTripPlayers:
       initialTrips,
 
-    result:
-      null,
+    result: null,
   };
 
   // ตองตั้งแต่แจก = 31
@@ -1495,9 +1447,7 @@ function startRound(
   const firstDiscard =
     room.game.deck.pop();
 
-  if (
-    firstDiscard
-  ) {
+  if (firstDiscard) {
     room.game
       .discardPile
       .push(
@@ -1505,9 +1455,7 @@ function startRound(
       );
   }
 
-  sendState(
-    room
-  );
+  sendState(room);
 }
 
 // ======================================================
@@ -1516,26 +1464,37 @@ function startRound(
 
 function restartVoidRound(
   room: Room,
-
-  roundNumber:
-    number,
-
-  oldStarter:
-    string
+  roundNumber: number,
+  oldStarter: string,
+  oldActiveIds: string[]
 ) {
+  const remainingIds =
+    oldActiveIds.filter(
+      (id) => {
+        const player =
+          findPlayer(
+            room,
+            id
+          );
+
+        return Boolean(
+          player &&
+          player.status !==
+            "LEFT"
+        );
+      }
+    );
+
   let starterId =
     oldStarter;
 
   if (
-    !livePlayers(
-      room
-    ).some(
-      (player) =>
-        player.id ===
-        starterId
+    !remainingIds.includes(
+      starterId
     )
   ) {
     starterId =
+      remainingIds[0] ||
       room.hostId;
   }
 
@@ -1543,8 +1502,9 @@ function restartVoidRound(
     room,
     {
       roundNumber,
-
       starterId,
+      playerIds:
+        remainingIds,
     }
   );
 }
@@ -1574,9 +1534,7 @@ function advanceTurn(
       game.currentPlayerId
     );
 
-  if (
-    index === -1
-  ) {
+  if (index === -1) {
     return;
   }
 
@@ -1598,17 +1556,14 @@ function advanceFinalTurn(
   const game =
     room.game;
 
-  if (
-    !game
-  ) {
+  if (!game) {
     return;
   }
 
   if (
     game
       .finalTurnsRemaining
-      .length >
-    0
+      .length > 0
   ) {
     game
       .finalTurnsRemaining
@@ -1618,8 +1573,7 @@ function advanceFinalTurn(
   if (
     game
       .finalTurnsRemaining
-      .length ===
-    0
+      .length === 0
   ) {
     settleRound(
       room,
@@ -1638,9 +1592,7 @@ function advanceFinalTurn(
   game.hasDrawn =
     false;
 
-  sendState(
-    room
-  );
+  sendState(room);
 }
 
 // ======================================================
@@ -1651,8 +1603,7 @@ function rebuildDeck(
   game: GameState
 ) {
   if (
-    game.deck.length >
-    0
+    game.deck.length > 0
   ) {
     return;
   }
@@ -1680,16 +1631,13 @@ function rebuildDeck(
 }
 
 // ======================================================
-// LEAVE PLAYER
+// LEAVE
 // ======================================================
 
 function leavePlayer(
   room: Room,
-
   player: Player,
-
-  voidCurrentRound:
-    boolean
+  voidCurrentRound: boolean
 ) {
   const game =
     room.game;
@@ -1712,6 +1660,13 @@ function leavePlayer(
     game?.starterId ||
     room.hostId;
 
+  const oldActiveIds =
+    game
+      ? [
+          ...game.activePlayerIds,
+        ]
+      : [];
+
   player.status =
     "LEFT";
 
@@ -1726,12 +1681,8 @@ function leavePlayer(
       player.id
     );
 
-  if (
-    timer
-  ) {
-    clearTimeout(
-      timer
-    );
+  if (timer) {
+    clearTimeout(timer);
 
     disconnectTimers.delete(
       player.id
@@ -1742,29 +1693,23 @@ function leavePlayer(
     room.hostId ===
     player.id
   ) {
-    chooseNewHost(
-      room
-    );
+    chooseNewHost(room);
   }
 
   if (
-    livePlayers(
-      room
-    ).length ===
-    0
+    livePlayers(room)
+      .length === 0
   ) {
     room.status =
       "ended";
 
-    sendState(
-      room
-    );
+    sendState(room);
 
     return;
   }
 
-  // ออกกลางรอบ
-  // รอบโมฆะ
+  // ออกจากเกมจริงกลางรอบ
+  // รอบปัจจุบัน VOID
   if (
     voidCurrentRound &&
     wasActive &&
@@ -1774,15 +1719,14 @@ function leavePlayer(
     restartVoidRound(
       room,
       oldRound,
-      oldStarter
+      oldStarter,
+      oldActiveIds
     );
 
     return;
   }
 
-  if (
-    game
-  ) {
+  if (game) {
     delete game.hands[
       player.id
     ];
@@ -1790,15 +1734,13 @@ function leavePlayer(
     game.activePlayerIds =
       game.activePlayerIds.filter(
         (id) =>
-          id !==
-          player.id
+          id !== player.id
       );
 
     game.finalTurnsRemaining =
       game.finalTurnsRemaining.filter(
         (id) =>
-          id !==
-          player.id
+          id !== player.id
       );
 
     if (
@@ -1806,40 +1748,27 @@ function leavePlayer(
       player.id
     ) {
       game.currentPlayerId =
-        game.activePlayerIds[
+        game
+          .activePlayerIds[
           0
-        ] ||
-        null;
+        ] || null;
 
       game.hasDrawn =
         false;
     }
   }
 
-  sendState(
-    room
-  );
+  sendState(room);
 }
 
-// ======================================================
-// RECONNECT EXPIRED
-// ======================================================
-
 function expireReconnect(
-  roomCode:
-    string,
-
-  playerId:
-    string
+  roomCode: string,
+  playerId: string
 ) {
   const room =
-    rooms.get(
-      roomCode
-    );
+    rooms.get(roomCode);
 
-  if (
-    !room
-  ) {
+  if (!room) {
     return;
   }
 
@@ -1857,9 +1786,6 @@ function expireReconnect(
     return;
   }
 
-  // เกิน 5 นาที
-  // เปลี่ยนเป็น LEFT
-  // ไม่ลบ Chip / Ledger / History
   leavePlayer(
     room,
     player,
@@ -1868,20 +1794,19 @@ function expireReconnect(
 }
 
 // ======================================================
-// SOCKET
+// SOCKET EVENTS
 // ======================================================
 
 io.on(
   "connection",
   (socket) => {
-
     console.log(
       "🟢 Connected:",
       socket.id
     );
 
     // ==================================================
-    // CREATE
+    // CREATE ROOM
     // ==================================================
 
     socket.on(
@@ -1889,20 +1814,15 @@ io.on(
       (
         data: {
           name: string;
-
-          multiplier:
-            number;
+          multiplier: number;
         },
-
         callback
       ) => {
         let code =
           createRoomCode();
 
         while (
-          rooms.has(
-            code
-          )
+          rooms.has(code)
         ) {
           code =
             createRoomCode();
@@ -1914,7 +1834,8 @@ io.on(
             createId(),
 
           name:
-            data.name?.trim() ||
+            data.name
+              ?.trim() ||
             "Player",
 
           token:
@@ -1929,8 +1850,7 @@ io.on(
           disconnectedAt:
             null,
 
-          totalChip:
-            0,
+          totalChip: 0,
         };
 
         const room:
@@ -1943,8 +1863,7 @@ io.on(
           multiplier:
             Number(
               data.multiplier
-            ) ||
-            1,
+            ) || 1,
 
           status:
             "waiting",
@@ -1952,17 +1871,15 @@ io.on(
           players:
             [player],
 
-          game:
-            null,
+          game: null,
 
-          ledger:
-            {},
+          ledger: {},
 
-          history:
-            [],
+          history: [],
 
-          emojiUsage:
-            {},
+          emojiUsage: {},
+
+          chatMessages: [],
         };
 
         rooms.set(
@@ -1975,9 +1892,7 @@ io.on(
           player.id
         );
 
-        socket.join(
-          code
-        );
+        socket.join(code);
 
         callback({
           ok: true,
@@ -1989,19 +1904,15 @@ io.on(
             player.token,
 
           room:
-            publicRoom(
-              room
-            ),
+            publicRoom(room),
         });
 
-        sendState(
-          room
-        );
+        sendState(room);
       }
     );
 
     // ==================================================
-    // JOIN
+    // JOIN ROOM
     // ==================================================
 
     socket.on(
@@ -2009,10 +1920,8 @@ io.on(
       (
         data: {
           name: string;
-
           code: string;
         },
-
         callback
       ) => {
         const code =
@@ -2021,16 +1930,11 @@ io.on(
             .toUpperCase();
 
         const room =
-          rooms.get(
-            code
-          );
+          rooms.get(code);
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
-
             message:
               "ไม่พบห้อง",
           });
@@ -2044,7 +1948,6 @@ io.on(
         ) {
           callback({
             ok: false,
-
             message:
               "เกมจบแล้ว",
           });
@@ -2053,14 +1956,11 @@ io.on(
         }
 
         if (
-          livePlayers(
-            room
-          ).length >=
-          10
+          livePlayers(room)
+            .length >= 10
         ) {
           callback({
             ok: false,
-
             message:
               "ห้องเต็มแล้ว",
           });
@@ -2074,7 +1974,8 @@ io.on(
             createId(),
 
           name:
-            data.name?.trim() ||
+            data.name
+              ?.trim() ||
             "Player",
 
           token:
@@ -2089,8 +1990,7 @@ io.on(
           disconnectedAt:
             null,
 
-          totalChip:
-            0,
+          totalChip: 0,
         };
 
         room.players.push(
@@ -2106,7 +2006,6 @@ io.on(
           player.id
         ] = {
           count: 0,
-
           lastAt: 0,
         };
 
@@ -2124,21 +2023,18 @@ io.on(
             player.token,
 
           room:
-            publicRoom(
-              room
-            ),
+            publicRoom(room),
         });
 
-        // ถ้าเกมกำลังเล่น
-        // คนใหม่รอรอบหน้า
-        sendState(
-          room
-        );
+        // ถ้ากำลังเล่น
+        // คนใหม่จะยังไม่อยู่ activePlayerIds
+        // จึงเป็น spectator
+        sendState(room);
       }
     );
 
     // ==================================================
-    // RESUME
+    // RESUME SESSION
     // ==================================================
 
     socket.on(
@@ -2147,13 +2043,11 @@ io.on(
         data: {
           code: string;
 
-          playerId:
-            string;
+          playerId: string;
 
           playerToken:
             string;
         },
-
         callback
       ) => {
         const room =
@@ -2163,9 +2057,7 @@ io.on(
               .toUpperCase()
           );
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
 
@@ -2216,9 +2108,7 @@ io.on(
             player.id
           );
 
-        if (
-          timer
-        ) {
+        if (timer) {
           clearTimeout(
             timer
           );
@@ -2244,11 +2134,10 @@ io.on(
           room.code
         );
 
-        // ปิด connection เก่า
         if (
           oldSocketId &&
           oldSocketId !==
-          socket.id
+            socket.id
         ) {
           const oldSocket =
             io.sockets.sockets.get(
@@ -2267,39 +2156,33 @@ io.on(
             player.id,
 
           room:
-            publicRoom(
-              room
-            ),
+            publicRoom(room),
         });
 
-        sendState(
-          room
-        );
+        sendState(room);
       }
     );
 
     // ==================================================
-    // START GAME
+    // SHUFFLE SEATS
     // ==================================================
 
     socket.on(
-      "start-game",
+      "shuffle-seats",
       (
         data: {
           code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
               .toUpperCase()
           );
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
 
@@ -2317,8 +2200,231 @@ io.on(
           );
 
         if (
-          !player
+          !player ||
+          room.hostId !==
+            player.id
         ) {
+          callback({
+            ok: false,
+
+            message:
+              "เฉพาะ Host เท่านั้น",
+          });
+
+          return;
+        }
+
+        if (
+          room.status ===
+            "playing" &&
+          room.game &&
+          room.game.phase !==
+            "showdown"
+        ) {
+          callback({
+            ok: false,
+
+            message:
+              "ไม่สามารถสุ่มที่นั่งระหว่างรอบได้",
+          });
+
+          return;
+        }
+
+        const live =
+          room.players.filter(
+            (item) =>
+              item.status !==
+              "LEFT"
+          );
+
+        const left =
+          room.players.filter(
+            (item) =>
+              item.status ===
+              "LEFT"
+          );
+
+        room.players = [
+          ...shuffle(live),
+          ...left,
+        ];
+
+        sendState(room);
+
+        callback({
+          ok: true,
+        });
+      }
+    );
+
+    // ==================================================
+    // CHAT
+    // ==================================================
+
+    socket.on(
+      "send-chat",
+      (
+        data: {
+          code: string;
+          message: string;
+        },
+        callback
+      ) => {
+        const room =
+          rooms.get(
+            data.code
+              ?.trim()
+              .toUpperCase()
+          );
+
+        if (!room) {
+          callback({
+            ok: false,
+            message:
+              "ไม่พบห้อง",
+          });
+
+          return;
+        }
+
+        if (
+          room.status ===
+          "ended"
+        ) {
+          callback({
+            ok: false,
+            message:
+              "เกมจบแล้ว",
+          });
+
+          return;
+        }
+
+        const player =
+          getSocketPlayer(
+            room,
+            socket
+          );
+
+        if (
+          !player ||
+          player.status ===
+            "LEFT"
+        ) {
+          callback({
+            ok: false,
+
+            message:
+              "ไม่สามารถส่งข้อความได้",
+          });
+
+          return;
+        }
+
+        const message =
+          String(
+            data.message || ""
+          )
+            .trim()
+            .slice(
+              0,
+              MAX_CHAT_LENGTH
+            );
+
+        if (!message) {
+          callback({
+            ok: false,
+
+            message:
+              "กรุณาพิมพ์ข้อความ",
+          });
+
+          return;
+        }
+
+        const chatMessage:
+          ChatMessage = {
+          id:
+            createId(),
+
+          playerId:
+            player.id,
+
+          name:
+            player.name,
+
+          message,
+
+          createdAt:
+            Date.now(),
+        };
+
+        room.chatMessages.push(
+          chatMessage
+        );
+
+        if (
+          room.chatMessages
+            .length >
+          MAX_CHAT_MESSAGES
+        ) {
+          room.chatMessages =
+            room.chatMessages.slice(
+              -MAX_CHAT_MESSAGES
+            );
+        }
+
+        io.to(
+          room.code
+        ).emit(
+          "chat-message",
+          chatMessage
+        );
+
+        callback({
+          ok: true,
+        });
+      }
+    );
+
+    // ==================================================
+    // START GAME
+    // ==================================================
+
+    socket.on(
+      "start-game",
+      (
+        data: {
+          code: string;
+        },
+        callback
+      ) => {
+        const room =
+          rooms.get(
+            data.code
+              ?.trim()
+              .toUpperCase()
+          );
+
+        if (!room) {
+          callback({
+            ok: false,
+
+            message:
+              "ไม่พบห้อง",
+          });
+
+          return;
+        }
+
+        const player =
+          getSocketPlayer(
+            room,
+            socket
+          );
+
+        if (!player) {
           callback({
             ok: false,
 
@@ -2344,10 +2450,8 @@ io.on(
         }
 
         if (
-          livePlayers(
-            room
-          ).length <
-          2
+          livePlayers(room)
+            .length < 2
         ) {
           callback({
             ok: false,
@@ -2370,15 +2474,13 @@ io.on(
             ok: false,
 
             message:
-              "มีผู้เล่นกำลังเชื่อมต่อกลับ กรุณารอสักครู่",
+              "มีผู้เล่นกำลังเชื่อมต่อกลับ",
           });
 
           return;
         }
 
-        startRound(
-          room
-        );
+        startRound(room);
 
         callback({
           ok: true,
@@ -2396,12 +2498,13 @@ io.on(
         data: {
           code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
         const game =
@@ -2424,9 +2527,7 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback({
             ok: false,
 
@@ -2466,9 +2567,7 @@ io.on(
           return;
         }
 
-        if (
-          game.hasDrawn
-        ) {
+        if (game.hasDrawn) {
           callback({
             ok: false,
 
@@ -2479,21 +2578,17 @@ io.on(
           return;
         }
 
-        rebuildDeck(
-          game
-        );
+        rebuildDeck(game);
 
         const card =
           game.deck.pop();
 
-        if (
-          !card
-        ) {
+        if (!card) {
           callback({
             ok: false,
 
             message:
-              "ไม่มีไพ่",
+              "ไม่มีไพ่ในกอง",
           });
 
           return;
@@ -2501,16 +2596,12 @@ io.on(
 
         game.hands[
           player.id
-        ].push(
-          card
-        );
+        ].push(card);
 
         game.hasDrawn =
           true;
 
-        sendState(
-          room
-        );
+        sendState(room);
 
         callback({
           ok: true,
@@ -2528,12 +2619,13 @@ io.on(
         data: {
           code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
         const game =
@@ -2556,14 +2648,27 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback({
             ok: false,
 
             message:
               "Session ไม่ถูกต้อง",
+          });
+
+          return;
+        }
+
+        if (
+          !game.activePlayerIds.includes(
+            player.id
+          )
+        ) {
+          callback({
+            ok: false,
+
+            message:
+              "รอเล่นรอบหน้า",
           });
 
           return;
@@ -2583,9 +2688,7 @@ io.on(
           return;
         }
 
-        if (
-          game.hasDrawn
-        ) {
+        if (game.hasDrawn) {
           callback({
             ok: false,
 
@@ -2597,13 +2700,9 @@ io.on(
         }
 
         const card =
-          game
-            .discardPile
-            .pop();
+          game.discardPile.pop();
 
-        if (
-          !card
-        ) {
+        if (!card) {
           callback({
             ok: false,
 
@@ -2616,16 +2715,12 @@ io.on(
 
         game.hands[
           player.id
-        ].push(
-          card
-        );
+        ].push(card);
 
         game.hasDrawn =
           true;
 
-        sendState(
-          room
-        );
+        sendState(room);
 
         callback({
           ok: true,
@@ -2634,25 +2729,24 @@ io.on(
     );
 
     // ==================================================
-    // DISCARD
+    // DISCARD CARD
     // ==================================================
 
     socket.on(
       "discard-card",
       (
         data: {
-          code:
-            string;
+          code: string;
 
-          cardId:
-            string;
+          cardId: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
         const game =
@@ -2675,11 +2769,12 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback({
             ok: false,
+
+            message:
+              "Session ไม่ถูกต้อง",
           });
 
           return;
@@ -2724,9 +2819,7 @@ io.on(
               data.cardId
           );
 
-        if (
-          index === -1
-        ) {
+        if (index === -1) {
           callback({
             ok: false,
 
@@ -2749,14 +2842,38 @@ io.on(
           discarded
         );
 
+        // ประวัติทิ้งไพ่
+        game
+          .discardHistoryByPlayer[
+          player.id
+        ] ??= [];
+
+        game
+          .discardHistoryByPlayer[
+          player.id
+        ].push(
+          discarded
+        );
+
+        // เก็บล่าสุด 5 ใบ
+        if (
+          game
+            .discardHistoryByPlayer[
+            player.id
+          ].length > 5
+        ) {
+          game
+            .discardHistoryByPlayer[
+            player.id
+          ].shift();
+        }
+
         game.hasDrawn =
           false;
 
-        // 31 ระหว่างเล่น
-        // ไม่บังคับจบรอบ
-        //
-        // ถ้าเป็น final round
-        // เล่นรอบสุดท้ายต่อให้ครบ
+        // สำคัญ:
+        // ได้ 31 ระหว่างเล่น
+        // ไม่จบรอบอัตโนมัติ
 
         if (
           game.phase ===
@@ -2773,13 +2890,9 @@ io.on(
           return;
         }
 
-        advanceTurn(
-          room
-        );
+        advanceTurn(room);
 
-        sendState(
-          room
-        );
+        sendState(room);
 
         callback({
           ok: true,
@@ -2795,15 +2908,15 @@ io.on(
       "knock",
       (
         data: {
-          code:
-            string;
+          code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
         const game =
@@ -2826,9 +2939,7 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback({
             ok: false,
           });
@@ -2864,9 +2975,7 @@ io.on(
           return;
         }
 
-        if (
-          game.hasDrawn
-        ) {
+        if (game.hasDrawn) {
           callback({
             ok: false,
 
@@ -2886,9 +2995,10 @@ io.on(
           );
 
         const finalTurns:
-          string[] =
-          [];
+          string[] = [];
 
+        // ทุกคนยกเว้นคน Knock
+        // ได้อีกคนละ 1 Turn
         for (
           let step = 1;
           step <
@@ -2916,9 +3026,7 @@ io.on(
           finalTurns;
 
         game.currentPlayerId =
-          finalTurns[
-            0
-          ] ||
+          finalTurns[0] ||
           null;
 
         game.hasDrawn =
@@ -2933,9 +3041,7 @@ io.on(
             "knock"
           );
         } else {
-          sendState(
-            room
-          );
+          sendState(room);
         }
 
         callback({
@@ -2954,17 +3060,16 @@ io.on(
         data: {
           code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
           });
@@ -2981,7 +3086,7 @@ io.on(
         if (
           !player ||
           room.hostId !==
-          player.id
+            player.id
         ) {
           callback({
             ok: false,
@@ -3025,9 +3130,7 @@ io.on(
           return;
         }
 
-        startRound(
-          room
-        );
+        startRound(room);
 
         callback({
           ok: true,
@@ -3043,18 +3146,16 @@ io.on(
       "emoji-reaction",
       (
         data: {
-          code:
-            string;
-
-          emoji:
-            string;
+          code: string;
+          emoji: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
         if (
@@ -3075,9 +3176,7 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback?.({
             ok: false,
           });
@@ -3101,7 +3200,6 @@ io.on(
           player.id
         ] ??= {
           count: 0,
-
           lastAt: 0,
         };
 
@@ -3123,8 +3221,7 @@ io.on(
             message:
               "Emoji ครบ 10 ครั้งแล้ว",
 
-            remaining:
-              0,
+            remaining: 0,
           });
 
           return;
@@ -3182,7 +3279,6 @@ io.on(
 
         callback?.({
           ok: true,
-
           remaining,
         });
       }
@@ -3196,20 +3292,18 @@ io.on(
       "leave-room",
       (
         data: {
-          code:
-            string;
+          code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
           });
@@ -3223,9 +3317,7 @@ io.on(
             socket
           );
 
-        if (
-          !player
-        ) {
+        if (!player) {
           callback({
             ok: false,
           });
@@ -3257,20 +3349,18 @@ io.on(
       "end-game",
       (
         data: {
-          code:
-            string;
+          code: string;
         },
-
         callback
       ) => {
         const room =
           rooms.get(
             data.code
+              ?.trim()
+              .toUpperCase()
           );
 
-        if (
-          !room
-        ) {
+        if (!room) {
           callback({
             ok: false,
           });
@@ -3287,7 +3377,7 @@ io.on(
         if (
           !player ||
           room.hostId !==
-          player.id
+            player.id
         ) {
           callback({
             ok: false,
@@ -3302,16 +3392,12 @@ io.on(
         room.status =
           "ended";
 
-        if (
-          room.game
-        ) {
+        if (room.game) {
           room.game.currentPlayerId =
             null;
         }
 
-        sendState(
-          room
-        );
+        sendState(room);
 
         callback({
           ok: true,
@@ -3331,19 +3417,15 @@ io.on(
             socket.id
           );
 
-        if (
-          !found
-        ) {
+        if (!found) {
           return;
         }
 
         const {
           room,
           player,
-        } =
-          found;
+        } = found;
 
-        // socket เก่า
         if (
           player.socketId !==
           socket.id
@@ -3367,18 +3449,14 @@ io.on(
         player.disconnectedAt =
           Date.now();
 
-        sendState(
-          room
-        );
+        sendState(room);
 
         const oldTimer =
           disconnectTimers.get(
             player.id
           );
 
-        if (
-          oldTimer
-        ) {
+        if (oldTimer) {
           clearTimeout(
             oldTimer
           );
@@ -3392,7 +3470,6 @@ io.on(
                 player.id
               );
             },
-
             RECONNECT_GRACE_MS
           );
 
@@ -3415,20 +3492,27 @@ app.get(
     res.json({
       ok: true,
 
-      game:
-        "31 Scat V4.2",
+      version:
+        "31 Scat V4.4",
 
       reconnectSeconds:
         300,
 
       rooms:
         rooms.size,
+
+      features: [
+        "discard-history",
+        "showdown-hands",
+        "room-chat",
+        "shuffle-seats",
+      ],
     });
   }
 );
 
 // ======================================================
-// SERVE REACT PRODUCTION BUILD
+// PRODUCTION FRONTEND
 // ======================================================
 
 const __filename =
@@ -3472,31 +3556,34 @@ app.get(
 const PORT =
   Number(
     process.env.PORT
-  ) ||
-  3001;
+  ) || 3001;
 
 httpServer.listen(
   PORT,
   "0.0.0.0",
   () => {
+    console.log("");
     console.log(
-      ""
+      "🃏 31 SCAT V4.4"
     );
-
     console.log(
-      "🃏 31 SCAT V4.2"
+      "♻️ Reconnect: 5 minutes"
     );
-
     console.log(
-      "♻️ Reconnect = 5 minutes"
+      "🂡 Discard History: ON"
     );
-
+    console.log(
+      "👁 Showdown Hands: ON"
+    );
+    console.log(
+      "💬 Room Chat: ON"
+    );
+    console.log(
+      "🔀 Shuffle Seats: ON"
+    );
     console.log(
       `🚀 PORT ${PORT}`
     );
-
-    console.log(
-      ""
-    );
+    console.log("");
   }
 );
