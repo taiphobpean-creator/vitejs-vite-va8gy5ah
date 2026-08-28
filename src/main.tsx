@@ -1,14 +1,13 @@
 import React, {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
 import ReactDOM from "react-dom/client";
 
-import {
-  io,
-} from "socket.io-client";
+import { io } from "socket.io-client";
 
 import "./styles.css";
 
@@ -39,8 +38,7 @@ type Player = {
 
   name: string;
 
-  totalChip:
-    number;
+  totalChip: number;
 
   status:
     PlayerStatus;
@@ -49,25 +47,33 @@ type Player = {
     number | null;
 };
 
-type Ledger =
-  Record<
-    string,
-    Record<
-      string,
-      number
-    >
-  >;
+type Ledger = Record<
+  string,
+  Record<string, number>
+>;
+
+type Settlement = {
+  winnerId: string;
+
+  loserId: string;
+
+  difference: number;
+
+  multiplier: number;
+
+  bonus: number;
+
+  chips: number;
+};
 
 type RoundResult = {
-  roundNumber:
-    number;
+  roundNumber: number;
 
-  starterId:
-    string;
+  starterId: string;
 
   reason:
-    "knock" |
-    "initial-trip";
+    | "knock"
+    | "initial-trip";
 
   scores:
     Record<
@@ -82,7 +88,31 @@ type RoundResult = {
     >;
 
   settlements:
-    any[];
+    Settlement[];
+
+  finalHands:
+    Record<
+      string,
+      Card[]
+    >;
+
+  discardHistoryByPlayer:
+    Record<
+      string,
+      Card[]
+    >;
+};
+
+type ChatMessage = {
+  id: string;
+
+  playerId: string;
+
+  name: string;
+
+  message: string;
+
+  createdAt: number;
 };
 
 type Room = {
@@ -90,13 +120,12 @@ type Room = {
 
   hostId: string;
 
-  multiplier:
-    number;
+  multiplier: number;
 
   status:
-    "waiting" |
-    "playing" |
-    "ended";
+    | "waiting"
+    | "playing"
+    | "ended";
 
   reconnectGraceMs:
     number;
@@ -109,6 +138,9 @@ type Room = {
 
   history:
     RoundResult[];
+
+  chatMessages:
+    ChatMessage[];
 };
 
 type TablePlayer = {
@@ -116,8 +148,7 @@ type TablePlayer = {
 
   name: string;
 
-  totalChip:
-    number;
+  totalChip: number;
 
   status:
     PlayerStatus;
@@ -125,24 +156,20 @@ type TablePlayer = {
   activeInRound:
     boolean;
 
-  cardCount:
-    number;
+  cardCount: number;
 };
 
 type GameState = {
-  myPlayerId:
-    string;
+  myPlayerId: string;
 
-  roundNumber:
-    number;
+  roundNumber: number;
 
   phase:
-    "playing" |
-    "final-round" |
-    "showdown";
+    | "playing"
+    | "final-round"
+    | "showdown";
 
-  hand:
-    Card[];
+  hand: Card[];
 
   activeInRound:
     boolean;
@@ -150,14 +177,12 @@ type GameState = {
   tablePlayers:
     TablePlayer[];
 
-  starterId:
-    string;
+  starterId: string;
 
   currentPlayerId:
     string | null;
 
-  hasDrawn:
-    boolean;
+  hasDrawn: boolean;
 
   knockedBy:
     string | null;
@@ -165,14 +190,19 @@ type GameState = {
   finalTurnsRemaining:
     string[];
 
-  deckCount:
-    number;
+  deckCount: number;
 
   topDiscard:
     Card | null;
 
   result:
     RoundResult | null;
+
+  discardHistoryByPlayer:
+    Record<
+      string,
+      Card[]
+    >;
 
   emojiRemaining:
     number;
@@ -181,16 +211,13 @@ type GameState = {
 type Reaction = {
   id: string;
 
-  playerId:
-    string;
+  playerId: string;
 
   name: string;
 
-  emoji:
-    string;
+  emoji: string;
 
-  seed:
-    number;
+  seed: number;
 };
 
 // ======================================================
@@ -198,35 +225,30 @@ type Reaction = {
 // ======================================================
 
 const SESSION_KEY =
-  "scat31-session-v42";
+  "scat31-session-v44";
 
 type SavedSession = {
-  roomCode:
-    string;
+  roomCode: string;
 
-  playerId:
-    string;
+  playerId: string;
 
-  playerToken:
-    string;
+  playerToken: string;
 };
 
 function loadSession():
   SavedSession | null {
   try {
-    const data =
+    const value =
       localStorage.getItem(
         SESSION_KEY
       );
 
-    if (
-      !data
-    ) {
+    if (!value) {
       return null;
     }
 
     return JSON.parse(
-      data
+      value
     );
   } catch {
     return null;
@@ -234,13 +256,13 @@ function loadSession():
 }
 
 function saveSession(
-  data: SavedSession
+  session:
+    SavedSession
 ) {
   localStorage.setItem(
     SESSION_KEY,
-
     JSON.stringify(
-      data
+      session
     )
   );
 }
@@ -255,81 +277,69 @@ function clearSession() {
 // SOCKET
 // ======================================================
 
-const socket =
-  io(
-    import.meta.env.DEV
-      ? "http://localhost:3001"
-      : undefined,
+const socket = io(
+  import.meta.env.DEV
+    ? "http://localhost:3001"
+    : undefined,
+  {
+    reconnection: true,
 
-    {
-      reconnection:
-        true,
+    reconnectionAttempts:
+      Infinity,
 
-      reconnectionAttempts:
-        Infinity,
+    reconnectionDelay:
+      500,
 
-      reconnectionDelay:
-        500,
+    reconnectionDelayMax:
+      5000,
 
-      reconnectionDelayMax:
-        5000,
-
-      timeout:
-        20000,
-    }
-  );
+    timeout: 20000,
+  }
+);
 
 // ======================================================
 // APP
 // ======================================================
 
 function App() {
-
   const [
     connected,
     setConnected,
-  ] =
-    useState(
-      socket.connected
-    );
+  ] = useState(
+    socket.connected
+  );
 
   const [
     restoring,
     setRestoring,
-  ] =
-    useState(
-      Boolean(
-        loadSession()
-      )
-    );
+  ] = useState(
+    Boolean(
+      loadSession()
+    )
+  );
 
   const [
     myPlayerId,
     setMyPlayerId,
-  ] =
-    useState(
-      loadSession()
-        ?.playerId ||
-        ""
-    );
+  ] = useState(
+    loadSession()
+      ?.playerId || ""
+  );
 
   const [
     name,
     setName,
-  ] =
-    useState("");
+  ] = useState("");
 
   const [
     roomCode,
     setRoomCode,
-  ] =
-    useState("");
+  ] = useState("");
 
   const [
     multiplier,
     setMultiplier,
-  ] =
-    useState(2);
+  ] = useState(2);
 
   const [
     room,
@@ -350,22 +360,19 @@ function App() {
   const [
     selectedCard,
     setSelectedCard,
-  ] =
-    useState<
-      string | null
-    >(null);
+  ] = useState<
+    string | null
+  >(null);
 
   const [
     error,
     setError,
-  ] =
-    useState("");
+  ] = useState("");
 
   const [
     showLedger,
     setShowLedger,
-  ] =
-    useState(false);
+  ] = useState(false);
 
   const [
     reactions,
@@ -378,26 +385,40 @@ function App() {
   const [
     emojiRemaining,
     setEmojiRemaining,
-  ] =
-    useState(10);
+  ] = useState(10);
 
   const [
     emojiLock,
     setEmojiLock,
+  ] = useState(false);
+
+  const [
+    chatMessages,
+    setChatMessages,
   ] =
-    useState(false);
+    useState<
+      ChatMessage[]
+    >([]);
+
+  const [
+    chatText,
+    setChatText,
+  ] = useState("");
+
+  const chatEndRef =
+    useRef<
+      HTMLDivElement | null
+    >(null);
 
   // ====================================================
-  // RESUME
+  // RESUME SESSION
   // ====================================================
 
   function resumeSession() {
     const saved =
       loadSession();
 
-    if (
-      !saved
-    ) {
+    if (!saved) {
       setRestoring(
         false
       );
@@ -407,7 +428,6 @@ function App() {
 
     socket.emit(
       "resume-session",
-
       {
         code:
           saved.roomCode,
@@ -418,7 +438,6 @@ function App() {
         playerToken:
           saved.playerToken,
       },
-
       (
         response:
           any
@@ -432,21 +451,15 @@ function App() {
         ) {
           clearSession();
 
-          setRoom(
-            null
-          );
+          setRoom(null);
 
-          setGame(
-            null
-          );
+          setGame(null);
 
-          setMyPlayerId(
-            ""
-          );
+          setMyPlayerId("");
 
           setError(
             response?.message ||
-            "Session หมดอายุ"
+              "Session หมดอายุ"
           );
 
           return;
@@ -460,9 +473,13 @@ function App() {
           response.room
         );
 
-        setError(
-          ""
+        setChatMessages(
+          response.room
+            ?.chatMessages ||
+            []
         );
+
+        setError("");
       }
     );
   }
@@ -471,155 +488,188 @@ function App() {
   // SOCKET EVENTS
   // ====================================================
 
-  useEffect(
-    () => {
+  useEffect(() => {
+    function onConnect() {
+      setConnected(true);
 
-      function onConnect() {
-        setConnected(
-          true
-        );
-
-        if (
-          loadSession()
-        ) {
-          setRestoring(
-            true
-          );
-
-          resumeSession();
-        } else {
-          setRestoring(
-            false
-          );
-        }
-      }
-
-      function onDisconnect() {
-        setConnected(
-          false
-        );
-      }
-
-      function onRoomUpdate(
-        data: Room
+      if (
+        loadSession()
       ) {
-        setRoom(
-          data
-        );
+        setRestoring(true);
+
+        resumeSession();
+      } else {
+        setRestoring(false);
       }
+    }
 
-      function onGameState(
-        data: GameState
-      ) {
-        setGame(
-          data
-        );
+    function onDisconnect() {
+      setConnected(false);
+    }
 
-        setMyPlayerId(
-          data.myPlayerId
-        );
+    function onRoomUpdate(
+      data: Room
+    ) {
+      setRoom(data);
 
-        setEmojiRemaining(
-          data.emojiRemaining ??
+      setChatMessages(
+        data.chatMessages ||
+          []
+      );
+    }
+
+    function onGameState(
+      data:
+        GameState
+    ) {
+      setGame(data);
+
+      setMyPlayerId(
+        data.myPlayerId
+      );
+
+      setEmojiRemaining(
+        data.emojiRemaining ??
           10
-        );
+      );
 
-        if (
-          !data.hasDrawn
-        ) {
-          setSelectedCard(
-            null
-          );
-        }
-      }
-
-      function onEmoji(
-        reaction:
-          Reaction
+      if (
+        !data.hasDrawn
       ) {
-        setReactions(
-          (current) => [
-            ...current,
-            reaction,
-          ]
-        );
-
-        setTimeout(
-          () => {
-            setReactions(
-              (current) =>
-                current.filter(
-                  (item) =>
-                    item.id !==
-                    reaction.id
-                )
-            );
-          },
-
-          2300
+        setSelectedCard(
+          null
         );
       }
+    }
 
-      socket.on(
+    function onEmoji(
+      reaction:
+        Reaction
+    ) {
+      setReactions(
+        (current) => [
+          ...current,
+          reaction,
+        ]
+      );
+
+      window.setTimeout(
+        () => {
+          setReactions(
+            (current) =>
+              current.filter(
+                (item) =>
+                  item.id !==
+                  reaction.id
+              )
+          );
+        },
+        2300
+      );
+    }
+
+    function onChat(
+      message:
+        ChatMessage
+    ) {
+      setChatMessages(
+        (current) => {
+          if (
+            current.some(
+              (item) =>
+                item.id ===
+                message.id
+            )
+          ) {
+            return current;
+          }
+
+          return [
+            ...current,
+            message,
+          ].slice(-50);
+        }
+      );
+    }
+
+    socket.on(
+      "connect",
+      onConnect
+    );
+
+    socket.on(
+      "disconnect",
+      onDisconnect
+    );
+
+    socket.on(
+      "room-update",
+      onRoomUpdate
+    );
+
+    socket.on(
+      "game-state",
+      onGameState
+    );
+
+    socket.on(
+      "emoji-reaction",
+      onEmoji
+    );
+
+    socket.on(
+      "chat-message",
+      onChat
+    );
+
+    if (
+      socket.connected
+    ) {
+      onConnect();
+    }
+
+    return () => {
+      socket.off(
         "connect",
         onConnect
       );
 
-      socket.on(
+      socket.off(
         "disconnect",
         onDisconnect
       );
 
-      socket.on(
+      socket.off(
         "room-update",
         onRoomUpdate
       );
 
-      socket.on(
+      socket.off(
         "game-state",
         onGameState
       );
 
-      socket.on(
+      socket.off(
         "emoji-reaction",
         onEmoji
       );
 
-      if (
-        socket.connected
-      ) {
-        onConnect();
-      }
+      socket.off(
+        "chat-message",
+        onChat
+      );
+    };
+  }, []);
 
-      return () => {
-        socket.off(
-          "connect",
-          onConnect
-        );
-
-        socket.off(
-          "disconnect",
-          onDisconnect
-        );
-
-        socket.off(
-          "room-update",
-          onRoomUpdate
-        );
-
-        socket.off(
-          "game-state",
-          onGameState
-        );
-
-        socket.off(
-          "emoji-reaction",
-          onEmoji
-        );
-      };
+  useEffect(
+    () => {
+      chatEndRef.current
+        ?.scrollIntoView({
+          behavior:
+            "smooth",
+        });
     },
-
-    []
+    [chatMessages]
   );
 
   // ====================================================
@@ -648,98 +698,109 @@ function App() {
     return (
       room?.players.find(
         (player) =>
-          player.id ===
-          id
+          player.id === id
       )?.name ||
       "Player"
     );
   }
 
-  function callback(
-    response:
-      any
+  function seatNumber(
+    playerId: string
+  ) {
+    if (!room) {
+      return "-";
+    }
+
+    const active =
+      room.players.filter(
+        (player) =>
+          player.status !==
+          "LEFT"
+      );
+
+    const index =
+      active.findIndex(
+        (player) =>
+          player.id ===
+          playerId
+      );
+
+    return index >= 0
+      ? index + 1
+      : "-";
+  }
+
+  function handleResponse(
+    response: any
   ) {
     if (
       !response?.ok
     ) {
       setError(
         response?.message ||
-        "เกิดข้อผิดพลาด"
+          "เกิดข้อผิดพลาด"
       );
     } else {
-      setError(
-        ""
-      );
+      setError("");
     }
   }
 
   const previewScore =
-    useMemo(
-      () => {
-
-        if (
-          !game ||
-          game.hand.length !==
+    useMemo(() => {
+      if (
+        !game ||
+        game.hand.length !==
           3
-        ) {
-          return "-";
-        }
+      ) {
+        return "-";
+      }
 
-        const hand =
-          game.hand;
+      const hand =
+        game.hand;
 
-        const trip =
-          hand.every(
-            (card) =>
-              card.rank ===
-              hand[0].rank
-          );
+      if (
+        hand.every(
+          (card) =>
+            card.rank ===
+            hand[0].rank
+        )
+      ) {
+        return 30.5;
+      }
 
-        if (
-          trip
-        ) {
-          return 30.5;
-        }
+      const totals:
+        Record<
+          Suit,
+          number
+        > = {
+        "♠": 0,
+        "♥": 0,
+        "♦": 0,
+        "♣": 0,
+      };
 
-        const totals:
-          Record<
-            Suit,
-            number
-          > = {
-            "♠": 0,
-            "♥": 0,
-            "♦": 0,
-            "♣": 0,
-          };
+      for (
+        const card
+        of hand
+      ) {
+        totals[
+          card.suit
+        ] += card.value;
+      }
 
-        for (
-          const card
-          of hand
-        ) {
-          totals[
-            card.suit
-          ] +=
-            card.value;
-        }
-
-        return Math.max(
-          ...Object.values(
-            totals
-          )
-        );
-      },
-
-      [game]
-    );
+      return Math.max(
+        ...Object.values(
+          totals
+        )
+      );
+    }, [game]);
 
   // ====================================================
-  // ROOM
+  // ROOM ACTIONS
   // ====================================================
 
   function createRoom() {
-    if (
-      !name.trim()
-    ) {
+    if (!name.trim()) {
       setError(
         "กรุณาใส่ชื่อ"
       );
@@ -749,25 +810,22 @@ function App() {
 
     socket.emit(
       "create-room",
-
       {
         name:
           name.trim(),
 
         multiplier,
       },
-
       (
         response:
           any
       ) => {
-
         if (
           !response?.ok
         ) {
           setError(
             response?.message ||
-            "สร้างห้องไม่ได้"
+              "สร้างห้องไม่ได้"
           );
 
           return;
@@ -792,9 +850,13 @@ function App() {
           response.room
         );
 
-        setError(
-          ""
+        setChatMessages(
+          response.room
+            .chatMessages ||
+            []
         );
+
+        setError("");
       }
     );
   }
@@ -813,7 +875,6 @@ function App() {
 
     socket.emit(
       "join-room",
-
       {
         name:
           name.trim(),
@@ -823,18 +884,16 @@ function App() {
             .trim()
             .toUpperCase(),
       },
-
       (
         response:
           any
       ) => {
-
         if (
           !response?.ok
         ) {
           setError(
             response?.message ||
-            "เข้าห้องไม่ได้"
+              "เข้าห้องไม่ได้"
           );
 
           return;
@@ -859,48 +918,57 @@ function App() {
           response.room
         );
 
-        setError(
-          ""
+        setChatMessages(
+          response.room
+            .chatMessages ||
+            []
         );
+
+        setError("");
       }
     );
   }
 
   function startGame() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     socket.emit(
       "start-game",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
-
-      callback
+      handleResponse
     );
   }
 
   function nextRound() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     socket.emit(
       "next-round",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
+      handleResponse
+    );
+  }
 
-      callback
+  function shuffleSeats() {
+    if (!room) return;
+
+    socket.emit(
+      "shuffle-seats",
+      {
+        code: room.code,
+      },
+      (
+        response:
+          any
+      ) => {
+        handleResponse(
+          response
+        );
+      }
     );
   }
 
@@ -909,40 +977,26 @@ function App() {
   // ====================================================
 
   function drawDeck() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     socket.emit(
       "draw-deck",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
-
-      callback
+      handleResponse
     );
   }
 
   function drawDiscard() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     socket.emit(
       "draw-discard",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
-
-      callback
+      handleResponse
     );
   }
 
@@ -956,7 +1010,6 @@ function App() {
 
     socket.emit(
       "discard-card",
-
       {
         code:
           room.code,
@@ -964,13 +1017,11 @@ function App() {
         cardId:
           selectedCard,
       },
-
       (
         response:
           any
       ) => {
-
-        callback(
+        handleResponse(
           response
         );
 
@@ -986,21 +1037,59 @@ function App() {
   }
 
   function knock() {
+    if (!room) return;
+
+    socket.emit(
+      "knock",
+      {
+        code: room.code,
+      },
+      handleResponse
+    );
+  }
+
+  // ====================================================
+  // CHAT
+  // ====================================================
+
+  function sendChat() {
     if (
-      !room
+      !room ||
+      !chatText.trim()
     ) {
       return;
     }
 
+    const text =
+      chatText
+        .trim()
+        .slice(
+          0,
+          200
+        );
+
     socket.emit(
-      "knock",
-
+      "send-chat",
       {
-        code:
-          room.code,
-      },
+        code: room.code,
 
-      callback
+        message: text,
+      },
+      (
+        response:
+          any
+      ) => {
+        if (
+          response?.ok
+        ) {
+          setChatText("");
+        } else {
+          setError(
+            response?.message ||
+              "ส่งข้อความไม่ได้"
+          );
+        }
+      }
     );
   }
 
@@ -1014,31 +1103,24 @@ function App() {
     if (
       !room ||
       emojiLock ||
-      emojiRemaining <=
-        0
+      emojiRemaining <= 0
     ) {
       return;
     }
 
-    setEmojiLock(
-      true
-    );
+    setEmojiLock(true);
 
     socket.emit(
       "emoji-reaction",
-
       {
-        code:
-          room.code,
+        code: room.code,
 
         emoji,
       },
-
       (
         response:
           any
       ) => {
-
         if (
           response?.remaining !==
           undefined
@@ -1051,36 +1133,31 @@ function App() {
         if (
           !response?.ok &&
           response?.message !==
-          "กดเร็วเกินไป"
+            "กดเร็วเกินไป"
         ) {
           setError(
             response?.message ||
-            ""
+              ""
           );
         }
       }
     );
 
-    setTimeout(
+    window.setTimeout(
       () =>
         setEmojiLock(
           false
         ),
-
       400
     );
   }
 
   // ====================================================
-  // LEAVE
+  // LEAVE / END
   // ====================================================
 
   function leaveRoom() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     if (
       !window.confirm(
@@ -1092,21 +1169,17 @@ function App() {
 
     socket.emit(
       "leave-room",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
-
       (
         response:
           any
       ) => {
-
         if (
           !response?.ok
         ) {
-          callback(
+          handleResponse(
             response
           );
 
@@ -1115,39 +1188,29 @@ function App() {
 
         clearSession();
 
-        setRoom(
-          null
-        );
+        setRoom(null);
 
-        setGame(
-          null
-        );
+        setGame(null);
 
-        setMyPlayerId(
-          ""
-        );
+        setMyPlayerId("");
 
         setSelectedCard(
           null
         );
 
-        setError(
-          ""
-        );
+        setChatMessages([]);
+
+        setError("");
       }
     );
   }
 
   function endGame() {
-    if (
-      !room
-    ) {
-      return;
-    }
+    if (!room) return;
 
     if (
       !window.confirm(
-        "ต้องการจบเกมทั้งหมดหรือไม่?"
+        "ต้องการจบเกมทั้งหมดและสรุปยอดหรือไม่?"
       )
     ) {
       return;
@@ -1155,30 +1218,23 @@ function App() {
 
     socket.emit(
       "end-game",
-
       {
-        code:
-          room.code,
+        code: room.code,
       },
-
-      callback
+      handleResponse
     );
   }
 
   function goHome() {
     clearSession();
 
-    setRoom(
-      null
-    );
+    setRoom(null);
 
-    setGame(
-      null
-    );
+    setGame(null);
 
-    setMyPlayerId(
-      ""
-    );
+    setMyPlayerId("");
+
+    setChatMessages([]);
   }
 
   // ====================================================
@@ -1187,21 +1243,15 @@ function App() {
 
   function CardView({
     card,
-
     selectable = false,
   }: {
-    card:
-      Card;
+    card: Card;
 
-    selectable?:
-      boolean;
+    selectable?: boolean;
   }) {
-
     const red =
-      card.suit ===
-        "♥" ||
-      card.suit ===
-        "♦";
+      card.suit === "♥" ||
+      card.suit === "♦";
 
     const className = [
       "playing-card",
@@ -1220,9 +1270,7 @@ function App() {
         : "",
     ].join(" ");
 
-    if (
-      !selectable
-    ) {
+    if (!selectable) {
       return (
         <div
           className={
@@ -1245,7 +1293,6 @@ function App() {
         className={
           className
         }
-
         onClick={() =>
           setSelectedCard(
             card.id
@@ -1263,6 +1310,97 @@ function App() {
     );
   }
 
+  function MiniCard({
+    card,
+  }: {
+    card: Card;
+  }) {
+    const red =
+      card.suit === "♥" ||
+      card.suit === "♦";
+
+    return (
+      <div
+        className={[
+          "mini-card",
+          red
+            ? "mini-card-red"
+            : "",
+        ].join(" ")}
+      >
+        <span>
+          {card.rank}
+        </span>
+
+        <b>
+          {card.suit}
+        </b>
+      </div>
+    );
+  }
+
+  function DiscardHistory({
+    playerId,
+    showdown = false,
+  }: {
+    playerId: string;
+
+    showdown?: boolean;
+  }) {
+    let cards: Card[] =
+      [];
+
+    if (
+      showdown &&
+      game?.result
+    ) {
+      cards =
+        game.result
+          .discardHistoryByPlayer?.[
+          playerId
+        ] || [];
+    } else {
+      cards =
+        game
+          ?.discardHistoryByPlayer?.[
+          playerId
+        ] || [];
+    }
+
+    return (
+      <div className="discard-history">
+        <div className="discard-history-title">
+          LAST DISCARD
+        </div>
+
+        <div className="mini-card-row">
+          {cards.length ===
+          0 ? (
+            <span className="no-discard">
+              —
+            </span>
+          ) : (
+            cards
+              .slice(-5)
+              .map(
+                (
+                  card,
+                  index
+                ) => (
+                  <MiniCard
+                    key={`${card.id}-${index}`}
+                    card={
+                      card
+                    }
+                  />
+                )
+              )
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ====================================================
   // STATUS
   // ====================================================
@@ -1273,7 +1411,6 @@ function App() {
     status:
       PlayerStatus;
   }) {
-
     if (
       status ===
       "RECONNECTING"
@@ -1286,8 +1423,7 @@ function App() {
     }
 
     if (
-      status ===
-      "LEFT"
+      status === "LEFT"
     ) {
       return (
         <span className="left-badge">
@@ -1300,17 +1436,14 @@ function App() {
   }
 
   // ====================================================
-  // EMOJI LAYER
+  // EMOJI UI
   // ====================================================
 
   function EmojiLayer() {
     return (
       <div className="emoji-layer">
         {reactions.map(
-          (
-            reaction
-          ) => {
-
+          (reaction) => {
             const lane =
               Math.floor(
                 reaction.seed *
@@ -1319,8 +1452,7 @@ function App() {
 
             const left =
               18 +
-              lane *
-                38;
+              lane * 38;
 
             const drift =
               20 +
@@ -1331,17 +1463,14 @@ function App() {
               (
                 reaction.seed -
                 0.5
-              ) *
-              24;
+              ) * 24;
 
             return (
               <div
                 key={
                   reaction.id
                 }
-
                 className="emoji-pop-left"
-
                 style={
                   {
                     "--emoji-left":
@@ -1376,7 +1505,6 @@ function App() {
   }
 
   function EmojiBar() {
-
     const emojis = [
       "😂",
       "🤣",
@@ -1392,11 +1520,9 @@ function App() {
 
     return (
       <div className="emoji-section">
-
         <div className="emoji-counter">
-          Emoji{" "}
-          {emojiRemaining}
-          /10
+          EMOJI{" "}
+          {emojiRemaining}/10
         </div>
 
         <div className="emoji-bar">
@@ -1406,12 +1532,10 @@ function App() {
                 key={
                   emoji
                 }
-
                 disabled={
                   emojiRemaining <=
                   0
                 }
-
                 onClick={() =>
                   sendEmoji(
                     emoji
@@ -1428,11 +1552,143 @@ function App() {
   }
 
   // ====================================================
+  // ROOM CHAT
+  // ====================================================
+
+  function RoomChat() {
+    if (!room) {
+      return null;
+    }
+
+    return (
+      <aside className="chat-panel">
+        <div className="chat-header">
+          <div>
+            💬 ROOM CHAT
+          </div>
+
+          <small>
+            {chatMessages.length}/50
+          </small>
+        </div>
+
+        <div className="chat-messages">
+          {chatMessages.length ===
+          0 && (
+            <div className="chat-empty">
+              ยังไม่มีข้อความ
+            </div>
+          )}
+
+          {chatMessages.map(
+            (message) => (
+              <div
+                className={[
+                  "chat-message",
+                  message.playerId ===
+                  myPlayerId
+                    ? "my-chat-message"
+                    : "",
+                ].join(" ")}
+                key={
+                  message.id
+                }
+              >
+                <div className="chat-message-top">
+                  <strong>
+                    {
+                      message.name
+                    }
+                  </strong>
+
+                  <span>
+                    {new Date(
+                      message.createdAt
+                    ).toLocaleTimeString(
+                      "th-TH",
+                      {
+                        hour:
+                          "2-digit",
+                        minute:
+                          "2-digit",
+                      }
+                    )}
+                  </span>
+                </div>
+
+                <p>
+                  {
+                    message.message
+                  }
+                </p>
+              </div>
+            )
+          )}
+
+          <div
+            ref={
+              chatEndRef
+            }
+          />
+        </div>
+
+        <div className="chat-input-row">
+          <input
+            value={
+              chatText
+            }
+            maxLength={
+              200
+            }
+            placeholder="พิมพ์ข้อความ..."
+            onChange={(
+              event
+            ) =>
+              setChatText(
+                event.target
+                  .value
+              )
+            }
+            onKeyDown={(
+              event
+            ) => {
+              if (
+                event.key ===
+                  "Enter" &&
+                !event.shiftKey
+              ) {
+                event.preventDefault();
+
+                sendChat();
+              }
+            }}
+          />
+
+          <button
+            disabled={
+              !chatText.trim() ||
+              !connected
+            }
+            onClick={
+              sendChat
+            }
+          >
+            SEND
+          </button>
+        </div>
+
+        <div className="chat-count">
+          {chatText.length}/200
+        </div>
+      </aside>
+    );
+  }
+
+  // ====================================================
   // LEDGER
   // ====================================================
 
   function LedgerModal() {
-
     if (
       !room ||
       !showLedger
@@ -1443,17 +1699,13 @@ function App() {
     const mine =
       room.ledger[
         myPlayerId
-      ] ||
-      {};
+      ] || {};
 
     return (
       <div className="modal-bg">
-
         <div className="modal">
-
           <button
             className="modal-close"
-
             onClick={() =>
               setShowLedger(
                 false
@@ -1503,17 +1755,14 @@ function App() {
             )
             .map(
               (player) => {
-
                 const value =
                   mine[
                     player.id
-                  ] ||
-                  0;
+                  ] || 0;
 
                 return (
                   <div
                     className="ledger-row"
-
                     key={
                       player.id
                     }
@@ -1533,26 +1782,21 @@ function App() {
                       )}
                     </span>
 
-                    {value >
-                    0 ? (
-                      <strong className="positive">
-                        +
-                        {
-                          value
-                        }
-                      </strong>
-                    ) : value <
-                      0 ? (
-                      <strong className="negative">
-                        {
-                          value
-                        }
-                      </strong>
-                    ) : (
-                      <strong>
-                        0
-                      </strong>
-                    )}
+                    <strong
+                      className={
+                        value > 0
+                          ? "positive"
+                          : value < 0
+                          ? "negative"
+                          : ""
+                      }
+                    >
+                      {value > 0
+                        ? "+"
+                        : ""}
+
+                      {value}
+                    </strong>
                   </div>
                 );
               }
@@ -1575,7 +1819,6 @@ function App() {
               ) => (
                 <div
                   className="total-row"
-
                   key={
                     player.id
                   }
@@ -1583,10 +1826,8 @@ function App() {
                   <span>
                     #
                     {
-                      index +
-                      1
-                    }
-                    {" "}
+                      index + 1
+                    }{" "}
                     {
                       player.name
                     }
@@ -1630,11 +1871,10 @@ function App() {
   }
 
   // ====================================================
-  // CONNECTION OVERLAY
+  // RECONNECT OVERLAY
   // ====================================================
 
   function ConnectionOverlay() {
-
     if (
       connected &&
       !restoring
@@ -1650,9 +1890,7 @@ function App() {
 
     return (
       <div className="connection-overlay">
-
         <div className="connection-box">
-
           <div className="reconnect-spinner">
             ↻
           </div>
@@ -1668,14 +1906,13 @@ function App() {
           <small>
             ระบบจะรอคุณสูงสุด 5 นาที
           </small>
-
         </div>
       </div>
     );
   }
 
   // ====================================================
-  // RESTORING
+  // RESTORE
   // ====================================================
 
   if (
@@ -1684,9 +1921,7 @@ function App() {
   ) {
     return (
       <div className="restore-page">
-
         <div className="connection-box">
-
           <div className="reconnect-spinner">
             ↻
           </div>
@@ -1698,21 +1933,19 @@ function App() {
           <p>
             กำลังโหลดห้องเดิม
           </p>
-
         </div>
       </div>
     );
   }
 
   // ====================================================
-  // FINAL RESULT
+  // GAME ENDED
   // ====================================================
 
   if (
     room?.status ===
     "ended"
   ) {
-
     const sorted =
       [...room.players].sort(
         (a, b) =>
@@ -1721,14 +1954,9 @@ function App() {
       );
 
     const pairRows: {
-      from:
-        string;
-
-      to:
-        string;
-
-      amount:
-        number;
+      from: string;
+      to: string;
+      amount: number;
     }[] = [];
 
     for (
@@ -1744,7 +1972,6 @@ function App() {
         room.players.length;
         j++
       ) {
-
         const a =
           room.players[i];
 
@@ -1756,32 +1983,20 @@ function App() {
             a.id
           ]?.[
             b.id
-          ] ||
-          0;
+          ] || 0;
 
-        if (
-          value > 0
-        ) {
+        if (value > 0) {
           pairRows.push({
-            from:
-              b.name,
-
-            to:
-              a.name,
-
-            amount:
-              value,
+            from: b.name,
+            to: a.name,
+            amount: value,
           });
         } else if (
           value < 0
         ) {
           pairRows.push({
-            from:
-              a.name,
-
-            to:
-              b.name,
-
+            from: a.name,
+            to: b.name,
             amount:
               Math.abs(
                 value
@@ -1793,9 +2008,7 @@ function App() {
 
     return (
       <div className="app">
-
         <header>
-
           <div>
             <div className="logo">
               🃏 31 SCAT
@@ -1805,11 +2018,9 @@ function App() {
               FINAL RESULT
             </div>
           </div>
-
         </header>
 
         <main className="final-page">
-
           <h1>
             🏁 GAME OVER
           </h1>
@@ -1823,7 +2034,6 @@ function App() {
           </p>
 
           <section className="final-ranking">
-
             {sorted.map(
               (
                 player,
@@ -1831,7 +2041,6 @@ function App() {
               ) => (
                 <div
                   className="final-player"
-
                   key={
                     player.id
                   }
@@ -1839,8 +2048,7 @@ function App() {
                   <div className="rank-number">
                     #
                     {
-                      index +
-                      1
+                      index + 1
                     }
                   </div>
 
@@ -1884,11 +2092,9 @@ function App() {
                 </div>
               )
             )}
-
           </section>
 
           <section className="final-settlement">
-
             <h2>
               ใครเสียให้ใครบ้าง
             </h2>
@@ -1906,7 +2112,6 @@ function App() {
                 ) => (
                   <div
                     className="final-payment"
-
                     key={
                       index
                     }
@@ -1937,19 +2142,16 @@ function App() {
                 )
               )
             )}
-
           </section>
 
           <button
             className="primary home-button"
-
             onClick={
               goHome
             }
           >
             BACK TO HOME
           </button>
-
         </main>
       </div>
     );
@@ -1959,16 +2161,11 @@ function App() {
   // HOME
   // ====================================================
 
-  if (
-    !room
-  ) {
+  if (!room) {
     return (
       <div className="app">
-
         <header>
-
           <div>
-
             <div className="logo">
               🃏 31 SCAT
             </div>
@@ -1976,11 +2173,9 @@ function App() {
             <div className="subtitle">
               Custom Rules v1.1
             </div>
-
           </div>
 
           <div className="connection">
-
             <span
               className={
                 connected
@@ -1992,15 +2187,11 @@ function App() {
             {connected
               ? "Server Online"
               : "Connecting..."}
-
           </div>
-
         </header>
 
         <main className="home">
-
           <section className="hero">
-
             <div className="card-decoration">
               ♠ ♥ ♦ ♣
             </div>
@@ -2016,28 +2207,23 @@ function App() {
             <p>
               สร้างห้อง แล้วส่ง Room Code ให้เพื่อน
             </p>
-
           </section>
 
           <section className="panel">
-
             <label>
               YOUR NAME
             </label>
 
             <input
-              value={
-                name
-              }
-
+              value={name}
               onChange={(
                 event
               ) =>
                 setName(
-                  event.target.value
+                  event.target
+                    .value
                 )
               }
-
               placeholder="ชื่อผู้เล่น"
             />
 
@@ -2046,28 +2232,23 @@ function App() {
             </div>
 
             <div className="multipliers">
-
               {[
                 1,
                 2,
                 5,
                 10,
               ].map(
-                (
-                  value
-                ) => (
+                (value) => (
                   <button
                     key={
                       value
                     }
-
                     className={
                       multiplier ===
                       value
                         ? "selected"
                         : ""
                     }
-
                     onClick={() =>
                       setMultiplier(
                         value
@@ -2078,12 +2259,10 @@ function App() {
                   </button>
                 )
               )}
-
             </div>
 
             <button
               className="primary"
-
               onClick={
                 createRoom
               }
@@ -2099,11 +2278,7 @@ function App() {
               value={
                 roomCode
               }
-
-              maxLength={
-                4
-              }
-
+              maxLength={4}
               onChange={(
                 event
               ) =>
@@ -2111,13 +2286,11 @@ function App() {
                   event.target.value.toUpperCase()
                 )
               }
-
               placeholder="ROOM CODE"
             />
 
             <button
               className="secondary"
-
               onClick={
                 joinRoom
               }
@@ -2127,14 +2300,10 @@ function App() {
 
             {error && (
               <div className="error">
-                {
-                  error
-                }
+                {error}
               </div>
             )}
-
           </section>
-
         </main>
       </div>
     );
@@ -2149,44 +2318,45 @@ function App() {
       "waiting" ||
     !game
   ) {
-
-    const liveCount =
+    const players =
       room.players.filter(
         (player) =>
           player.status !==
           "LEFT"
-      ).length;
+      );
 
     return (
       <>
         <ConnectionOverlay />
-
         <LedgerModal />
 
         <div className="app">
-
           <header>
-
             <div>
-
               <div className="logo">
                 🃏 31 SCAT
               </div>
 
               <div className="subtitle">
                 ROOM{" "}
-                {
-                  room.code
-                }
+                {room.code}
               </div>
-
             </div>
 
             <div className="header-buttons">
+              {isHost && (
+                <button
+                  className="shuffle-button"
+                  onClick={
+                    shuffleSeats
+                  }
+                >
+                  🔀 SHUFFLE
+                </button>
+              )}
 
               <button
                 className="summary-button"
-
                 onClick={() =>
                   setShowLedger(
                     true
@@ -2198,28 +2368,21 @@ function App() {
 
               <button
                 className="leave-button"
-
                 onClick={
                   leaveRoom
                 }
               >
                 🚪 LEAVE
               </button>
-
             </div>
-
           </header>
 
           <main className="room-page">
-
             <div className="room-info">
-
               ROOM CODE
 
               <strong>
-                {
-                  room.code
-                }
+                {room.code}
               </strong>
 
               <span>
@@ -2229,116 +2392,125 @@ function App() {
                 }
                 ×
               </span>
-
             </div>
 
-            <section className="game-table">
+            <div className="waiting-layout">
+              <section className="game-table">
+                <div className="table-title">
+                  WAITING FOR PLAYERS
+                </div>
 
-              <div className="table-title">
-                WAITING FOR PLAYERS
-              </div>
+                <div className="players">
+                  {players.map(
+                    (
+                      player,
+                      index
+                    ) => (
+                      <div
+                        className={[
+                          "player",
 
-              <div className="players">
+                          player.status ===
+                          "RECONNECTING"
+                            ? "disconnected-player"
+                            : "",
+                        ].join(" ")}
+                        key={
+                          player.id
+                        }
+                      >
+                        <div className="seat-badge">
+                          SEAT{" "}
+                          {
+                            index + 1
+                          }
+                        </div>
 
-                {room.players.map(
-                  (player) => (
-                    <div
-                      className={[
-                        "player",
+                        <div className="avatar">
+                          {player.name
+                            .charAt(
+                              0
+                            )
+                            .toUpperCase()}
+                        </div>
 
-                        player.status ===
-                        "LEFT"
-                          ? "left-player"
-                          : "",
+                        <strong>
+                          {
+                            player.name
+                          }
+                        </strong>
 
-                        player.status ===
-                        "RECONNECTING"
-                          ? "disconnected-player"
-                          : "",
-                      ].join(" ")}
+                        {player.id ===
+                          room.hostId && (
+                          <span className="host">
+                            HOST
+                          </span>
+                        )}
 
-                      key={
-                        player.id
+                        <StatusBadge
+                          status={
+                            player.status
+                          }
+                        />
+
+                        <div className="chips">
+                          {
+                            player.totalChip
+                          }{" "}
+                          CHIP
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+
+                <div className="player-count">
+                  {
+                    players.length
+                  }{" "}
+                  Players
+                </div>
+
+                {isHost ? (
+                  <>
+                    <button
+                      className="shuffle-seats-big"
+                      onClick={
+                        shuffleSeats
                       }
                     >
+                      🔀 SHUFFLE SEATS
+                    </button>
 
-                      <div className="avatar">
-                        {player.name
-                          .charAt(
-                            0
-                          )
-                          .toUpperCase()}
-                      </div>
-
-                      <strong>
-                        {
-                          player.name
-                        }
-                      </strong>
-
-                      {player.id ===
-                        room.hostId && (
-                        <span className="host">
-                          HOST
-                        </span>
-                      )}
-
-                      <StatusBadge
-                        status={
-                          player.status
-                        }
-                      />
-
-                      <div className="chips">
-                        {
-                          player.totalChip
-                        }{" "}
-                        CHIP
-                      </div>
-
-                    </div>
-                  )
+                    <button
+                      className="start-button"
+                      disabled={
+                        players.length <
+                        2
+                      }
+                      onClick={
+                        startGame
+                      }
+                    >
+                      START GAME
+                    </button>
+                  </>
+                ) : (
+                  <div className="waiting">
+                    รอ Host เริ่มเกม
+                  </div>
                 )}
 
-              </div>
+                {error && (
+                  <div className="error">
+                    {error}
+                  </div>
+                )}
+              </section>
 
-              <div className="player-count">
-                {liveCount} Players
-              </div>
-
-              {isHost ? (
-                <button
-                  className="start-button"
-
-                  disabled={
-                    liveCount <
-                    2
-                  }
-
-                  onClick={
-                    startGame
-                  }
-                >
-                  START GAME
-                </button>
-              ) : (
-                <div className="waiting">
-                  รอ Host เริ่มเกม
-                </div>
-              )}
-
-              {error && (
-                <div className="error">
-                  {
-                    error
-                  }
-                </div>
-              )}
-
-            </section>
-
+              <RoomChat />
+            </div>
           </main>
-
         </div>
       </>
     );
@@ -2356,17 +2528,12 @@ function App() {
     return (
       <>
         <ConnectionOverlay />
-
         <EmojiLayer />
-
         <LedgerModal />
 
         <div className="app">
-
           <header>
-
             <div>
-
               <div className="logo">
                 🃏 31 SCAT
               </div>
@@ -2377,14 +2544,22 @@ function App() {
                   game.roundNumber
                 }
               </div>
-
             </div>
 
             <div className="header-buttons">
+              {isHost && (
+                <button
+                  className="shuffle-button"
+                  onClick={
+                    shuffleSeats
+                  }
+                >
+                  🔀 SHUFFLE
+                </button>
+              )}
 
               <button
                 className="summary-button"
-
                 onClick={() =>
                   setShowLedger(
                     true
@@ -2396,7 +2571,6 @@ function App() {
 
               <button
                 className="leave-button"
-
                 onClick={
                   leaveRoom
                 }
@@ -2407,7 +2581,6 @@ function App() {
               {isHost && (
                 <button
                   className="end-button"
-
                   onClick={
                     endGame
                   }
@@ -2415,232 +2588,258 @@ function App() {
                   END GAME
                 </button>
               )}
-
             </div>
-
           </header>
 
           <main className="result-page">
-
             <h1>
               SHOWDOWN
             </h1>
 
-            <div className="result-grid">
-
-              {room.players.map(
-                (
-                  player
-                ) => {
-
-                  const score =
-                    game.result!
-                      .scores[
-                      player.id
-                    ];
-
-                  if (
-                    score ===
-                    undefined
-                  ) {
-                    return (
-                      <div
-                        className="result-player"
-
-                        key={
+            <div className="showdown-layout">
+              <div>
+                <div className="result-grid">
+                  {room.players.map(
+                    (player) => {
+                      const score =
+                        game.result!
+                          .scores[
                           player.id
-                        }
-                      >
+                        ];
 
-                        <div className="avatar">
-                          {player.name
-                            .charAt(
-                              0
-                            )
-                            .toUpperCase()}
-                        </div>
-
-                        <h3>
-                          {
-                            player.name
-                          }
-                        </h3>
-
-                        <StatusBadge
-                          status={
-                            player.status
-                          }
-                        />
-
-                        {player.status !==
-                          "LEFT" && (
-                          <>
-                            <div className="waiting-next">
-                              WAITING NEXT ROUND
+                      if (
+                        score ===
+                        undefined
+                      ) {
+                        return (
+                          <div
+                            className="result-player spectator-result"
+                            key={
+                              player.id
+                            }
+                          >
+                            <div className="avatar">
+                              {player.name
+                                .charAt(
+                                  0
+                                )
+                                .toUpperCase()}
                             </div>
 
-                            <small>
-                              ไม่คิด Chip รอบนี้
-                            </small>
-                          </>
-                        )}
+                            <h3>
+                              {
+                                player.name
+                              }
+                            </h3>
 
-                      </div>
-                    );
-                  }
+                            <StatusBadge
+                              status={
+                                player.status
+                              }
+                            />
 
-                  const net =
-                    game.result!
-                      .roundNet[
-                      player.id
-                    ] ||
-                    0;
+                            {player.status !==
+                              "LEFT" && (
+                              <>
+                                <div className="waiting-next">
+                                  WAITING NEXT ROUND
+                                </div>
 
-                  return (
-                    <div
-                      className="result-player"
+                                <small>
+                                  ไม่คิด Chip รอบนี้
+                                </small>
+                              </>
+                            )}
+                          </div>
+                        );
+                      }
 
-                      key={
-                        player.id
+                      const net =
+                        game.result!
+                          .roundNet[
+                          player.id
+                        ] || 0;
+
+                      const hand =
+                        game.result!
+                          .finalHands?.[
+                          player.id
+                        ] || [];
+
+                      return (
+                        <div
+                          className="result-player"
+                          key={
+                            player.id
+                          }
+                        >
+                          <div className="showdown-player-head">
+                            <div className="avatar">
+                              {player.name
+                                .charAt(
+                                  0
+                                )
+                                .toUpperCase()}
+                            </div>
+
+                            <div>
+                              <h3>
+                                {
+                                  player.name
+                                }
+                              </h3>
+
+                              <div className="showdown-seat">
+                                SEAT{" "}
+                                {seatNumber(
+                                  player.id
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <StatusBadge
+                            status={
+                              player.status
+                            }
+                          />
+
+                          <div className="showdown-hand">
+                            {hand.map(
+                              (card) => (
+                                <CardView
+                                  key={
+                                    card.id
+                                  }
+                                  card={
+                                    card
+                                  }
+                                />
+                              )
+                            )}
+                          </div>
+
+                          <div className="score-label">
+                            SCORE
+                          </div>
+
+                          <div className="big-score">
+                            {score}
+                          </div>
+
+                          <div
+                            className={[
+                              "result-chip",
+
+                              net > 0
+                                ? "positive"
+                                : net < 0
+                                ? "negative"
+                                : "",
+                            ].join(" ")}
+                          >
+                            {net > 0
+                              ? "+"
+                              : ""}
+
+                            {net} CHIP
+                          </div>
+
+                          <small>
+                            TOTAL{" "}
+                            {
+                              player.totalChip
+                            }
+                          </small>
+
+                          <DiscardHistory
+                            playerId={
+                              player.id
+                            }
+                            showdown
+                          />
+                        </div>
+                      );
+                    }
+                  )}
+                </div>
+
+                <EmojiBar />
+
+                {isHost && (
+                  <div className="showdown-host-actions">
+                    <button
+                      className="shuffle-seats-big"
+                      onClick={
+                        shuffleSeats
                       }
                     >
+                      🔀 SHUFFLE SEATS
+                    </button>
 
-                      <div className="avatar">
-                        {player.name
-                          .charAt(
-                            0
-                          )
-                          .toUpperCase()}
-                      </div>
+                    <button
+                      className="next-round"
+                      onClick={
+                        nextRound
+                      }
+                    >
+                      NEXT ROUND
+                    </button>
+                  </div>
+                )}
 
-                      <h3>
-                        {
-                          player.name
-                        }
-                      </h3>
+                {!isHost && (
+                  <div className="waiting">
+                    รอ Host เริ่มรอบต่อไป
+                  </div>
+                )}
 
-                      <StatusBadge
-                        status={
-                          player.status
-                        }
-                      />
+                {error && (
+                  <div className="error">
+                    {error}
+                  </div>
+                )}
+              </div>
 
-                      <div className="big-score">
-                        {
-                          score
-                        }
-                      </div>
-
-                      <div
-                        className={
-                          net >
-                          0
-                            ? "positive"
-                            : net <
-                              0
-                            ? "negative"
-                            : ""
-                        }
-                      >
-                        {net >
-                        0
-                          ? "+"
-                          : ""}
-
-                        {
-                          net
-                        }{" "}
-                        CHIP
-                      </div>
-
-                      <small>
-                        TOTAL{" "}
-                        {
-                          player.totalChip
-                        }
-                      </small>
-
-                    </div>
-                  );
-                }
-              )}
-
+              <RoomChat />
             </div>
-
-            <EmojiBar />
-
-            {isHost ? (
-              <button
-                className="next-round"
-
-                onClick={
-                  nextRound
-                }
-              >
-                NEXT ROUND
-              </button>
-            ) : (
-              <div className="waiting">
-                รอ Host เริ่มรอบต่อไป
-              </div>
-            )}
-
-            {error && (
-              <div className="error">
-                {
-                  error
-                }
-              </div>
-            )}
-
           </main>
-
         </div>
       </>
     );
   }
 
   // ====================================================
-  // PLAY GAME
+  // GAME
   // ====================================================
 
   return (
     <>
       <ConnectionOverlay />
-
       <EmojiLayer />
-
       <LedgerModal />
 
       <div className="app">
-
         <header>
-
           <div>
-
             <div className="logo">
               🃏 31 SCAT
             </div>
 
             <div className="subtitle">
               ROOM{" "}
-              {
-                room.code
-              }
+              {room.code}
               {" · "}
               ROUND{" "}
               {
                 game.roundNumber
               }
             </div>
-
           </div>
 
           <div className="header-buttons">
-
             <button
               className="summary-button"
-
               onClick={() =>
                 setShowLedger(
                   true
@@ -2652,7 +2851,6 @@ function App() {
 
             <button
               className="leave-button"
-
               onClick={
                 leaveRoom
               }
@@ -2663,7 +2861,6 @@ function App() {
             {isHost && (
               <button
                 className="end-button"
-
                 onClick={
                   endGame
                 }
@@ -2671,280 +2868,281 @@ function App() {
                 END GAME
               </button>
             )}
-
           </div>
-
         </header>
 
         <main className="game-page">
-
           {game.phase ===
-  "final-round" && (
-  <div className="final-banner">
-    ⚠️ FINAL ROUND ⚠️
-    <br />
+            "final-round" && (
+            <div className="final-banner">
+              <div className="final-warning">
+                ⚠️ FINAL ROUND ⚠️
+              </div>
 
-    <span>
-      {playerName(
-        game.knockedBy || ""
-      )}{" "}
-      KNOCKED
-    </span>
-  </div>
-)}
-          {!game.activeInRound && (
-            <div className="join-midround-banner">
-              👀 คุณเข้ามาระหว่างรอบ — รอเล่นในรอบถัดไป
+              <span>
+                {playerName(
+                  game.knockedBy ||
+                    ""
+                )}{" "}
+                KNOCKED
+              </span>
             </div>
           )}
 
-          <section className="real-table">
-
-            <div className="starter-display">
-
-              STARTER:{" "}
-
-              <strong>
-                {playerName(
-                  game.starterId
-                )}
-              </strong>
-
+          {!game.activeInRound && (
+            <div className="join-midround-banner">
+              👀 คุณเข้ามาระหว่างรอบ — WAITING NEXT ROUND
             </div>
+          )}
 
-            <div className="opponents">
+          <div className="game-layout">
+            <section className="real-table">
+              <div className="starter-display">
+                STARTER:{" "}
 
-              {game.tablePlayers.map(
-                (
-                  player
-                ) => (
-                  <div
-                    className={[
-                      "opponent",
+                <strong>
+                  {playerName(
+                    game.starterId
+                  )}
+                </strong>
+              </div>
 
-                      game.currentPlayerId ===
-                      player.id
-                        ? "current-player"
-                        : "",
+              <div className="opponents">
+                {game.tablePlayers.map(
+                  (player) => (
+                    <div
+                      className={[
+                        "opponent",
 
-                      !player.activeInRound
-                        ? "waiting-player"
-                        : "",
+                        game.currentPlayerId ===
+                        player.id
+                          ? "current-player"
+                          : "",
 
-                      player.status ===
-                      "RECONNECTING"
-                        ? "disconnected-player"
-                        : "",
+                        !player.activeInRound
+                          ? "waiting-player"
+                          : "",
 
-                      player.status ===
-                      "LEFT"
-                        ? "left-player"
-                        : "",
-                    ].join(" ")}
-
-                    key={
-                      player.id
-                    }
-                  >
-
-                    <strong>
-                      {
-                        player.name
+                        player.status ===
+                        "RECONNECTING"
+                          ? "disconnected-player"
+                          : "",
+                      ].join(" ")}
+                      key={
+                        player.id
                       }
-                    </strong>
-
-                    <StatusBadge
-                      status={
-                        player.status
-                      }
-                    />
-
-                    {player.status ===
-                    "LEFT" ? (
-                      <div className="waiting-next">
-                        LEFT
-                      </div>
-                    ) : !player.activeInRound ? (
-                      <div className="waiting-next">
-                        NEXT ROUND
-                      </div>
-                    ) : (
-                      <div className="card-backs">
-
-                        {Array.from({
-                          length:
-                            player.cardCount,
-                        }).map(
-                          (
-                            _,
-                            index
-                          ) => (
-                            <div
-                              className="card-back"
-
-                              key={
-                                index
-                              }
-                            >
-                              🂠
-                            </div>
-                          )
+                    >
+                      <div className="seat-badge">
+                        SEAT{" "}
+                        {seatNumber(
+                          player.id
                         )}
-
                       </div>
-                    )}
 
-                    <small>
-                      {
-                        player.totalChip
-                      }{" "}
-                      CHIP
-                    </small>
-
-                  </div>
-                )
-              )}
-
-            </div>
-
-            <div className="table-center">
-
-              <button
-                className="deck-stack"
-
-                disabled={
-                  !game.activeInRound ||
-                  !myTurn ||
-                  game.hasDrawn ||
-                  !connected
-                }
-
-                onClick={
-                  drawDeck
-                }
-              >
-
-                <div>
-                  🂠
-                </div>
-
-                <small>
-                  DECK
-                </small>
-
-                <b>
-                  {
-                    game.deckCount
-                  }
-                </b>
-
-              </button>
-
-              <button
-                className="discard-stack"
-
-                disabled={
-                  !game.activeInRound ||
-                  !myTurn ||
-                  game.hasDrawn ||
-                  !game.topDiscard ||
-                  !connected
-                }
-
-                onClick={
-                  drawDiscard
-                }
-              >
-
-                {game.topDiscard ? (
-                  <CardView
-                    card={
-                      game.topDiscard
-                    }
-                  />
-                ) : (
-                  <div>
-                    EMPTY
-                  </div>
-                )}
-
-                <small>
-                  DISCARD
-                </small>
-
-              </button>
-
-            </div>
-
-            {game.activeInRound ? (
-
-              <div
-                className={[
-                  "my-area",
-
-                  myTurn
-                    ? "my-turn"
-                    : "",
-                ].join(" ")}
-              >
-
-                <div className="turn-label">
-
-                  {myTurn
-                    ? "YOUR TURN"
-                    : `TURN: ${playerName(
-                        game.currentPlayerId ||
-                          ""
-                      )}`}
-
-                </div>
-
-                <div className="my-hand">
-
-                  {game.hand.map(
-                    (
-                      card
-                    ) => (
-                      <CardView
-                        key={
-                          card.id
+                      <strong className="opponent-name">
+                        {
+                          player.name
                         }
+                      </strong>
 
-                        card={
-                          card
-                        }
-
-                        selectable={
-                          myTurn &&
-                          game.hasDrawn &&
-                          connected
+                      <StatusBadge
+                        status={
+                          player.status
                         }
                       />
-                    )
+
+                      {!player.activeInRound ? (
+                        <div className="waiting-next">
+                          WAITING NEXT ROUND
+                        </div>
+                      ) : (
+                        <div className="card-backs">
+                          {Array.from({
+                            length:
+                              player.cardCount,
+                          }).map(
+                            (
+                              _,
+                              index
+                            ) => (
+                              <div
+                                className="card-back"
+                                key={
+                                  index
+                                }
+                              >
+                                🂠
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+
+                      {player.activeInRound && (
+                        <DiscardHistory
+                          playerId={
+                            player.id
+                          }
+                        />
+                      )}
+
+                      <small className="player-chip-small">
+                        {
+                          player.totalChip
+                        }{" "}
+                        CHIP
+                      </small>
+                    </div>
+                  )
+                )}
+              </div>
+
+              <div className="table-center">
+                <button
+                  className="deck-stack"
+                  disabled={
+                    !game.activeInRound ||
+                    !myTurn ||
+                    game.hasDrawn ||
+                    !connected
+                  }
+                  onClick={
+                    drawDeck
+                  }
+                >
+                  <div>
+                    🂠
+                  </div>
+
+                  <small>
+                    DECK
+                  </small>
+
+                  <b>
+                    {
+                      game.deckCount
+                    }
+                  </b>
+                </button>
+
+                <button
+                  className="discard-stack"
+                  disabled={
+                    !game.activeInRound ||
+                    !myTurn ||
+                    game.hasDrawn ||
+                    !game.topDiscard ||
+                    !connected
+                  }
+                  onClick={
+                    drawDiscard
+                  }
+                >
+                  {game.topDiscard ? (
+                    <CardView
+                      card={
+                        game.topDiscard
+                      }
+                    />
+                  ) : (
+                    <div className="empty-discard">
+                      EMPTY
+                    </div>
                   )}
 
-                </div>
+                  <small>
+                    DISCARD
+                  </small>
+                </button>
+              </div>
 
-                <div className="score-preview">
-                  SCORE:{" "}
-                  {
-                    previewScore
-                  }
-                </div>
+              {game.activeInRound ? (
+                <div
+                  className={[
+                    "my-area",
 
-                <div className="actions">
+                    myTurn
+                      ? "my-turn"
+                      : "",
+                  ].join(" ")}
+                >
+                  <div className="my-player-info">
+                    <span>
+                      {
+                        myPlayer?.name
+                      }
+                    </span>
 
-                  {myTurn &&
-                    !game.hasDrawn && (
+                    <span>
+                      SEAT{" "}
+                      {seatNumber(
+                        myPlayerId
+                      )}
+                    </span>
+
+                    <span>
+                      {
+                        myPlayer
+                          ?.totalChip ||
+                        0
+                      }{" "}
+                      CHIP
+                    </span>
+                  </div>
+
+                  <div className="turn-label">
+                    {myTurn
+                      ? "YOUR TURN"
+                      : `TURN: ${playerName(
+                          game.currentPlayerId ||
+                            ""
+                        )}`}
+                  </div>
+
+                  <div className="my-hand">
+                    {game.hand.map(
+                      (card) => (
+                        <CardView
+                          key={
+                            card.id
+                          }
+                          card={
+                            card
+                          }
+                          selectable={
+                            Boolean(
+                              myTurn &&
+                                game.hasDrawn &&
+                                connected
+                            )
+                          }
+                        />
+                      )
+                    )}
+                  </div>
+
+                  <div className="score-preview">
+                    SCORE:{" "}
+                    {
+                      previewScore
+                    }
+                  </div>
+
+                  <DiscardHistory
+                    playerId={
+                      myPlayerId
+                    }
+                  />
+
+                  <div className="actions">
+                    {myTurn &&
+                      !game.hasDrawn && (
                       <>
-
                         <button
                           className="action draw"
-
                           disabled={
                             !connected
                           }
-
                           onClick={
                             drawDeck
                           }
@@ -2954,12 +3152,10 @@ function App() {
 
                         <button
                           className="action draw"
-
                           disabled={
                             !game.topDiscard ||
                             !connected
                           }
-
                           onClick={
                             drawDiscard
                           }
@@ -2971,11 +3167,9 @@ function App() {
                           "playing" && (
                           <button
                             className="action knock"
-
                             disabled={
                               !connected
                             }
-
                             onClick={
                               knock
                             }
@@ -2983,67 +3177,55 @@ function App() {
                             KNOCK
                           </button>
                         )}
-
                       </>
                     )}
 
-                  {myTurn &&
-                    game.hasDrawn && (
-
+                    {myTurn &&
+                      game.hasDrawn && (
                       <button
                         className="action discard"
-
                         disabled={
                           !selectedCard ||
                           !connected
                         }
-
                         onClick={
                           discardCard
                         }
                       >
                         DISCARD SELECTED
                       </button>
-
                     )}
-
-                </div>
-
-                {!myTurn && (
-                  <div className="waiting-turn">
-                    รอ{" "}
-                    {playerName(
-                      game.currentPlayerId ||
-                        ""
-                    )}{" "}
-                    เล่น...
                   </div>
-                )}
 
-              </div>
+                  {!myTurn && (
+                    <div className="waiting-turn">
+                      รอ{" "}
+                      {playerName(
+                        game.currentPlayerId ||
+                          ""
+                      )}{" "}
+                      เล่น...
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="spectator-box">
+                  WAITING NEXT ROUND
+                </div>
+              )}
 
-            ) : (
+              <EmojiBar />
+            </section>
 
-              <div className="spectator-box">
-                WAITING NEXT ROUND
-              </div>
-
-            )}
-
-            <EmojiBar />
-
-          </section>
+            <RoomChat />
+          </div>
 
           {error && (
             <div className="error">
-              {
-                error
-              }
+              {error}
             </div>
           )}
-
         </main>
-
       </div>
     </>
   );
@@ -3055,6 +3237,4 @@ ReactDOM
       "root"
     )!
   )
-  .render(
-    <App />
-  );
+  .render(<App />);
