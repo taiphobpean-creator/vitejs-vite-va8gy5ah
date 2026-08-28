@@ -49,13 +49,17 @@ type SettlementLine = {
 
 type RoundResult = {
   roundNumber: number;
+  starterId: string;
+
   reason:
     | "31"
     | "knock"
     | "initial-trip";
 
   scores: Record<string, number>;
+
   roundNet: Record<string, number>;
+
   settlements: SettlementLine[];
 };
 
@@ -67,7 +71,12 @@ type GameState = {
     | "final-round"
     | "showdown";
 
+  activePlayerIds: string[];
+
+  starterId: string;
+
   deck: Card[];
+
   discardPile: Card[];
 
   hands: Record<string, Card[]>;
@@ -85,22 +94,34 @@ type GameState = {
   result: RoundResult | null;
 };
 
+type Ledger = Record<
+  string,
+  Record<string, number>
+>;
+
 type Room = {
   code: string;
+
   hostId: string;
+
   multiplier: number;
 
   status:
     | "waiting"
-    | "playing";
+    | "playing"
+    | "ended";
 
   players: Player[];
 
   game: GameState | null;
+
+  ledger: Ledger;
+
+  history: RoundResult[];
 };
 
 // ======================================================
-// EXPRESS / SOCKET
+// SERVER
 // ======================================================
 
 const app = express();
@@ -175,9 +196,13 @@ function createDeck(): Card[] {
   for (const suit of suits) {
     for (const rank of ranks) {
       deck.push({
-        id: `${index}-${rank}-${suit}`,
+        id:
+          `${Date.now()}-${index}-${rank}-${suit}`,
+
         suit,
+
         rank,
+
         value:
           rankValue(rank),
       });
@@ -242,7 +267,6 @@ function calculateScore(
   hand: Card[],
   initialHand = false
 ) {
-  // ตอง
   if (
     isThreeOfKind(hand)
   ) {
@@ -282,14 +306,14 @@ function createRoomCode() {
   const chars =
     "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-  let result = "";
+  let code = "";
 
   for (
     let i = 0;
     i < 4;
     i++
   ) {
-    result +=
+    code +=
       chars[
         Math.floor(
           Math.random() *
@@ -298,7 +322,258 @@ function createRoomCode() {
       ];
   }
 
-  return result;
+  return code;
+}
+
+// ======================================================
+// LEDGER
+// ======================================================
+
+function initLedgerPlayer(
+  room: Room,
+  playerId: string
+) {
+  if (
+    !room.ledger[playerId]
+  ) {
+    room.ledger[
+      playerId
+    ] = {};
+  }
+
+  for (
+    const player
+    of room.players
+  ) {
+    if (
+      room.ledger[
+        playerId
+      ][player.id] ===
+      undefined
+    ) {
+      room.ledger[
+        playerId
+      ][player.id] = 0;
+    }
+
+    if (
+      !room.ledger[
+        player.id
+      ]
+    ) {
+      room.ledger[
+        player.id
+      ] = {};
+    }
+
+    if (
+      room.ledger[
+        player.id
+      ][playerId] ===
+      undefined
+    ) {
+      room.ledger[
+        player.id
+      ][playerId] = 0;
+    }
+  }
+}
+
+function updateLedger(
+  room: Room,
+  winnerId: string,
+  loserId: string,
+  chips: number
+) {
+  initLedgerPlayer(
+    room,
+    winnerId
+  );
+
+  initLedgerPlayer(
+    room,
+    loserId
+  );
+
+  room.ledger[
+    winnerId
+  ][loserId] += chips;
+
+  room.ledger[
+    loserId
+  ][winnerId] -= chips;
+}
+
+// ======================================================
+// PLAYER HELPERS
+// ======================================================
+
+function findPlayer(
+  room: Room,
+  id: string
+) {
+  return room.players.find(
+    (player) =>
+      player.id === id
+  );
+}
+
+function activePlayers(
+  room: Room
+) {
+  if (!room.game) {
+    return [];
+  }
+
+  return room.game
+    .activePlayerIds
+    .map((id) =>
+      findPlayer(
+        room,
+        id
+      )
+    )
+    .filter(
+      Boolean
+    ) as Player[];
+}
+
+// ======================================================
+// NEXT ROUND STARTER
+// ======================================================
+
+function determineNextStarter(
+  room: Room
+) {
+  if (
+    room.history.length === 0
+  ) {
+    return room.hostId;
+  }
+
+  const previous =
+    room.history[
+      room.history.length - 1
+    ];
+
+  const existingPlayers =
+    room.players.filter(
+      (player) =>
+        previous.scores[
+          player.id
+        ] !== undefined
+    );
+
+  if (
+    existingPlayers.length ===
+    0
+  ) {
+    return room.hostId;
+  }
+
+  const highestScore =
+    Math.max(
+      ...existingPlayers.map(
+        (player) =>
+          previous.scores[
+            player.id
+          ]
+      )
+    );
+
+  let tied =
+    existingPlayers.filter(
+      (player) =>
+        previous.scores[
+          player.id
+        ] ===
+        highestScore
+    );
+
+  if (
+    tied.length === 1
+  ) {
+    return tied[0].id;
+  }
+
+  // Tie breaker:
+  // Chip head-to-head
+  // เฉพาะกลุ่มที่คะแนนเสมอกัน
+
+  const chipScores =
+    tied.map((player) => {
+      let value = 0;
+
+      for (
+        const opponent
+        of tied
+      ) {
+        if (
+          opponent.id ===
+          player.id
+        ) {
+          continue;
+        }
+
+        value +=
+          room.ledger[
+            player.id
+          ]?.[
+            opponent.id
+          ] || 0;
+      }
+
+      return {
+        player,
+        value,
+      };
+    });
+
+  const highestChip =
+    Math.max(
+      ...chipScores.map(
+        (item) =>
+          item.value
+      )
+    );
+
+  tied =
+    chipScores
+      .filter(
+        (item) =>
+          item.value ===
+          highestChip
+      )
+      .map(
+        (item) =>
+          item.player
+      );
+
+  if (
+    tied.length === 1
+  ) {
+    return tied[0].id;
+  }
+
+  // ยังเสมออีก
+  // ใช้ Seat Order เดิม
+
+  for (
+    const player
+    of room.players
+  ) {
+    if (
+      tied.some(
+        (item) =>
+          item.id ===
+          player.id
+      )
+    ) {
+      return player.id;
+    }
+  }
+
+  return room.hostId;
 }
 
 // ======================================================
@@ -309,7 +584,9 @@ function publicRoom(
   room: Room
 ) {
   return {
-    code: room.code,
+    code:
+      room.code,
+
     hostId:
       room.hostId,
 
@@ -322,18 +599,27 @@ function publicRoom(
     players:
       room.players.map(
         (player) => ({
-          id: player.id,
+          id:
+            player.id,
+
           name:
             player.name,
+
           totalChip:
             player.totalChip,
         })
       ),
+
+    ledger:
+      room.ledger,
+
+    history:
+      room.history,
   };
 }
 
 // ======================================================
-// SEND PRIVATE GAME STATE
+// SEND STATE
 // ======================================================
 
 function sendGameState(
@@ -373,7 +659,12 @@ function sendGameState(
       continue;
     }
 
-    const opponents =
+    const isActive =
+      game.activePlayerIds.includes(
+        player.id
+      );
+
+    const tablePlayers =
       room.players
         .filter(
           (p) =>
@@ -381,10 +672,20 @@ function sendGameState(
             player.id
         )
         .map((p) => ({
-          id: p.id,
-          name: p.name,
+          id:
+            p.id,
+
+          name:
+            p.name,
+
           totalChip:
             p.totalChip,
+
+          activeInRound:
+            game.activePlayerIds.includes(
+              p.id
+            ),
+
           cardCount:
             game.hands[
               p.id
@@ -406,7 +707,13 @@ function sendGameState(
             player.id
           ] || [],
 
-        opponents,
+        activeInRound:
+          isActive,
+
+        tablePlayers,
+
+        starterId:
+          game.starterId,
 
         currentPlayerId:
           game.currentPlayerId,
@@ -433,7 +740,7 @@ function sendGameState(
 }
 
 // ======================================================
-// SETTLEMENT
+// ROUND SETTLEMENT
 // ======================================================
 
 function settleRound(
@@ -448,6 +755,9 @@ function settleRound(
     return;
   }
 
+  const players =
+    activePlayers(room);
+
   const scores: Record<
     string,
     number
@@ -460,24 +770,25 @@ function settleRound(
 
   for (
     const player
-    of room.players
+    of players
   ) {
     const hand =
       game.hands[
         player.id
-      ];
+      ] || [];
 
-    const wasInitialTrip =
-      game.initialTripPlayers.includes(
-        player.id
-      );
+    const initialTrip =
+      game
+        .initialTripPlayers
+        .includes(
+          player.id
+        );
 
     scores[player.id] =
-      wasInitialTrip
+      initialTrip
         ? 31
         : calculateScore(
-            hand,
-            false
+            hand
           );
 
     roundNet[
@@ -491,44 +802,44 @@ function settleRound(
   for (
     let i = 0;
     i <
-    room.players.length;
+    players.length;
     i++
   ) {
     for (
       let j =
         i + 1;
       j <
-      room.players.length;
+      players.length;
       j++
     ) {
       const a =
-        room.players[i];
+        players[i];
 
       const b =
-        room.players[j];
+        players[j];
 
-      const aScore =
+      const scoreA =
         scores[a.id];
 
-      const bScore =
+      const scoreB =
         scores[b.id];
 
       if (
-        aScore ===
-        bScore
+        scoreA ===
+        scoreB
       ) {
         continue;
       }
 
       const winner =
-        aScore >
-        bScore
+        scoreA >
+        scoreB
           ? a
           : b;
 
       const loser =
-        aScore >
-        bScore
+        scoreA >
+        scoreB
           ? b
           : a;
 
@@ -546,9 +857,9 @@ function settleRound(
         winnerScore -
         loserScore;
 
-      // 31 ได้ double
       const bonus =
-        winnerScore === 31
+        winnerScore ===
+        31
           ? 2
           : 1;
 
@@ -564,6 +875,19 @@ function settleRound(
       roundNet[
         loser.id
       ] -= chips;
+
+      winner.totalChip +=
+        chips;
+
+      loser.totalChip -=
+        chips;
+
+      updateLedger(
+        room,
+        winner.id,
+        loser.id,
+        chips
+      );
 
       settlements.push({
         winnerId:
@@ -584,8 +908,6 @@ function settleRound(
     }
   }
 
-  // Safety:
-  // ผลรวมต้องเป็น 0
   const total =
     Object.values(
       roundNet
@@ -600,20 +922,31 @@ function settleRound(
     0.000001
   ) {
     console.error(
-      "Settlement error:",
+      "Settlement != 0:",
       total
     );
   }
 
-  for (
-    const player
-    of room.players
-  ) {
-    player.totalChip +=
-      roundNet[
-        player.id
-      ];
-  }
+  const result:
+    RoundResult = {
+      roundNumber:
+        game.roundNumber,
+
+      starterId:
+        game.starterId,
+
+      reason,
+
+      scores,
+
+      roundNet,
+
+      settlements,
+    };
+
+  room.history.push(
+    result
+  );
 
   game.phase =
     "showdown";
@@ -624,18 +957,12 @@ function settleRound(
   game.hasDrawn =
     false;
 
-  game.result = {
-    roundNumber:
-      game.roundNumber,
+  game.result =
+    result;
 
-    reason,
-
-    scores,
-    roundNet,
-    settlements,
-  };
-
-  sendGameState(room);
+  sendGameState(
+    room
+  );
 }
 
 // ======================================================
@@ -645,10 +972,49 @@ function settleRound(
 function startRound(
   room: Room
 ) {
+  if (
+    room.players.length <
+    2
+  ) {
+    return;
+  }
+
   let deck =
     shuffle(
       createDeck()
     );
+
+  const activeIds =
+    room.players.map(
+      (player) =>
+        player.id
+    );
+
+  const starterId =
+    room.history.length ===
+    0
+      ? room.hostId
+      : determineNextStarter(
+          room
+        );
+
+  const starterIndex =
+    activeIds.indexOf(
+      starterId
+    );
+
+  const orderedIds =
+    starterIndex >= 0
+      ? [
+          ...activeIds.slice(
+            starterIndex
+          ),
+          ...activeIds.slice(
+            0,
+            starterIndex
+          ),
+        ]
+      : activeIds;
 
   const hands: Record<
     string,
@@ -656,74 +1022,67 @@ function startRound(
   > = {};
 
   for (
-    const player
-    of room.players
+    const id
+    of orderedIds
   ) {
-    hands[
-      player.id
-    ] = [];
+    hands[id] = [];
   }
 
-  // แจกวนทีละใบ 3 รอบ
+  // แจกทีละใบ
   for (
     let round = 0;
     round < 3;
     round++
   ) {
     for (
-      const player
-      of room.players
+      const id
+      of orderedIds
     ) {
       const card =
         deck.pop();
 
       if (card) {
         hands[
-          player.id
+          id
         ].push(card);
       }
     }
   }
 
-  const previousRound =
-    room.game
-      ?.roundNumber || 0;
-
   const initialTrips =
-    room.players
-      .filter(
-        (player) =>
-          isThreeOfKind(
-            hands[
-              player.id
-            ]
-          )
-      )
-      .map(
-        (player) =>
-          player.id
-      );
+    orderedIds.filter(
+      (id) =>
+        isThreeOfKind(
+          hands[id]
+        )
+    );
 
   room.status =
     "playing";
 
   room.game = {
     roundNumber:
-      previousRound + 1,
+      (room.game
+        ?.roundNumber ||
+        0) + 1,
 
     phase:
       "playing",
 
+    activePlayerIds:
+      orderedIds,
+
+    starterId:
+      orderedIds[0],
+
     deck,
 
-    discardPile:
-      [],
+    discardPile: [],
 
     hands,
 
     currentPlayerId:
-      room.players[0]
-        ?.id || null,
+      orderedIds[0],
 
     hasDrawn:
       false,
@@ -741,8 +1100,7 @@ function startRound(
       null,
   };
 
-  // ตองตั้งแต่แจก
-  // จบรอบทันที
+  // ตองจากแจกแรก = 31
   if (
     initialTrips.length >
     0
@@ -755,21 +1113,24 @@ function startRound(
     return;
   }
 
-  // เปิด discard ใบแรก
   const firstDiscard =
     room.game.deck.pop();
 
   if (firstDiscard) {
-    room.game.discardPile.push(
-      firstDiscard
-    );
+    room.game
+      .discardPile
+      .push(
+        firstDiscard
+      );
   }
 
-  sendGameState(room);
+  sendGameState(
+    room
+  );
 }
 
 // ======================================================
-// ADVANCE NORMAL TURN
+// TURN
 // ======================================================
 
 function advanceTurn(
@@ -785,11 +1146,12 @@ function advanceTurn(
     return;
   }
 
+  const ids =
+    game.activePlayerIds;
+
   const index =
-    room.players.findIndex(
-      (player) =>
-        player.id ===
-        game.currentPlayerId
+    ids.indexOf(
+      game.currentPlayerId
     );
 
   if (
@@ -798,22 +1160,16 @@ function advanceTurn(
     return;
   }
 
-  const nextIndex =
+  const next =
     (index + 1) %
-    room.players.length;
+    ids.length;
 
   game.currentPlayerId =
-    room.players[
-      nextIndex
-    ].id;
+    ids[next];
 
   game.hasDrawn =
     false;
 }
-
-// ======================================================
-// FINAL ROUND ADVANCE
-// ======================================================
 
 function advanceFinalTurn(
   room: Room
@@ -825,14 +1181,15 @@ function advanceFinalTurn(
     return;
   }
 
-  // คนปัจจุบันเล่นจบแล้ว
   if (
     game
       .finalTurnsRemaining
       .length >
     0
   ) {
-    game.finalTurnsRemaining.shift();
+    game
+      .finalTurnsRemaining
+      .shift();
   }
 
   if (
@@ -855,14 +1212,16 @@ function advanceFinalTurn(
   game.hasDrawn =
     false;
 
-  sendGameState(room);
+  sendGameState(
+    room
+  );
 }
 
 // ======================================================
 // REBUILD DECK
 // ======================================================
 
-function rebuildDeckIfNeeded(
+function rebuildDeck(
   game: GameState
 ) {
   if (
@@ -881,7 +1240,9 @@ function rebuildDeckIfNeeded(
   }
 
   const top =
-    game.discardPile.pop()!;
+    game
+      .discardPile
+      .pop()!;
 
   game.deck =
     shuffle(
@@ -893,7 +1254,7 @@ function rebuildDeckIfNeeded(
 }
 
 // ======================================================
-// SOCKET EVENTS
+// SOCKET
 // ======================================================
 
 io.on(
@@ -928,43 +1289,57 @@ io.on(
             createRoomCode();
         }
 
-        const room: Room =
-          {
-            code,
+        const player:
+          Player = {
+          id:
+            socket.id,
 
-            hostId:
-              socket.id,
+          name:
+            data.name
+              ?.trim() ||
+            "Player",
 
-            multiplier:
-              Number(
-                data.multiplier
-              ) || 1,
+          totalChip: 0,
+        };
 
-            status:
-              "waiting",
+        const room:
+          Room = {
+          code,
 
-            players: [
-              {
-                id:
-                  socket.id,
+          hostId:
+            socket.id,
 
-                name:
-                  data.name?.trim() ||
-                  "Player",
+          multiplier:
+            Number(
+              data.multiplier
+            ) || 1,
 
-                totalChip: 0,
-              },
-            ],
+          status:
+            "waiting",
 
-            game: null,
-          };
+          players:
+            [player],
+
+          game: null,
+
+          ledger: {},
+
+          history: [],
+        };
 
         rooms.set(
           code,
           room
         );
 
-        socket.join(code);
+        initLedgerPlayer(
+          room,
+          player.id
+        );
+
+        socket.join(
+          code
+        );
 
         callback({
           ok: true,
@@ -981,7 +1356,7 @@ io.on(
     );
 
     // --------------------------------------------------
-    // JOIN
+    // JOIN ROOM
     // --------------------------------------------------
 
     socket.on(
@@ -1012,13 +1387,13 @@ io.on(
         }
 
         if (
-          room.status !==
-          "waiting"
+          room.status ===
+          "ended"
         ) {
           callback({
             ok: false,
             message:
-              "เกมเริ่มแล้ว",
+              "เกมนี้จบแล้ว",
           });
 
           return;
@@ -1026,7 +1401,7 @@ io.on(
 
         if (
           room.players
-            .length >= 8
+            .length >= 10
         ) {
           callback({
             ok: false,
@@ -1037,16 +1412,27 @@ io.on(
           return;
         }
 
-        room.players.push({
+        const player:
+          Player = {
           id:
             socket.id,
 
           name:
-            data.name?.trim() ||
+            data.name
+              ?.trim() ||
             "Player",
 
           totalChip: 0,
-        });
+        };
+
+        room.players.push(
+          player
+        );
+
+        initLedgerPlayer(
+          room,
+          player.id
+        );
 
         socket.join(
           code
@@ -1059,6 +1445,10 @@ io.on(
               room
             ),
         });
+
+        // ถ้าเกมกำลังเล่น
+        // ผู้เล่นใหม่จะไม่ได้ active
+        // จนกว่าจะ Next Round
 
         sendGameState(
           room
@@ -1087,8 +1477,6 @@ io.on(
         if (!room) {
           callback({
             ok: false,
-            message:
-              "ไม่พบห้อง",
           });
 
           return;
@@ -1101,7 +1489,7 @@ io.on(
           callback({
             ok: false,
             message:
-              "เฉพาะ Host เท่านั้น",
+              "เฉพาะ Host",
           });
 
           return;
@@ -1120,7 +1508,9 @@ io.on(
           return;
         }
 
-        startRound(room);
+        startRound(
+          room
+        );
 
         callback({
           ok: true,
@@ -1160,15 +1550,14 @@ io.on(
         }
 
         if (
-          game.phase !==
-            "playing" &&
-          game.phase !==
-            "final-round"
+          !game.activePlayerIds.includes(
+            socket.id
+          )
         ) {
           callback({
             ok: false,
             message:
-              "รอบจบแล้ว",
+              "รอเล่นรอบหน้า",
           });
 
           return;
@@ -1193,13 +1582,13 @@ io.on(
           callback({
             ok: false,
             message:
-              "คุณจั่วแล้ว",
+              "จั่วแล้ว",
           });
 
           return;
         }
 
-        rebuildDeckIfNeeded(
+        rebuildDeck(
           game
         );
 
@@ -1210,7 +1599,7 @@ io.on(
           callback({
             ok: false,
             message:
-              "ไม่มีไพ่ให้จั่ว",
+              "ไม่มีไพ่",
           });
 
           return;
@@ -1265,6 +1654,20 @@ io.on(
         }
 
         if (
+          !game.activePlayerIds.includes(
+            socket.id
+          )
+        ) {
+          callback({
+            ok: false,
+            message:
+              "รอเล่นรอบหน้า",
+          });
+
+          return;
+        }
+
+        if (
           game.currentPlayerId !==
           socket.id
         ) {
@@ -1282,15 +1685,15 @@ io.on(
         ) {
           callback({
             ok: false,
-            message:
-              "คุณจั่วแล้ว",
           });
 
           return;
         }
 
         const card =
-          game.discardPile.pop();
+          game
+            .discardPile
+            .pop();
 
         if (!card) {
           callback({
@@ -1370,7 +1773,7 @@ io.on(
           callback({
             ok: false,
             message:
-              "ต้องจั่วไพ่ก่อน",
+              "ต้องจั่วก่อน",
           });
 
           return;
@@ -1393,8 +1796,6 @@ io.on(
         ) {
           callback({
             ok: false,
-            message:
-              "ไม่พบไพ่",
           });
 
           return;
@@ -1408,17 +1809,18 @@ io.on(
             1
           );
 
-        game.discardPile.push(
-          discarded
-        );
+        game
+          .discardPile
+          .push(
+            discarded
+          );
 
         game.hasDrawn =
           false;
 
         const score =
           calculateScore(
-            hand,
-            false
+            hand
           );
 
         // 31 ก่อน Knock
@@ -1439,8 +1841,10 @@ io.on(
           return;
         }
 
-        // Final Round
-        // ต่อให้ 31 ก็ต้องเล่นจนครบ
+        // Knock Final Round
+        // ต่อให้ได้ 31
+        // ก็ต้องให้ทุกคนเล่นครบ
+
         if (
           game.phase ===
           "final-round"
@@ -1508,7 +1912,7 @@ io.on(
           callback({
             ok: false,
             message:
-              "เคาะไม่ได้",
+              "Knock ไม่ได้",
           });
 
           return;
@@ -1533,17 +1937,19 @@ io.on(
           callback({
             ok: false,
             message:
-              "ต้อง Knock ก่อนจั่ว",
+              "Knock ต้องกดก่อนจั่ว",
           });
 
           return;
         }
 
-        const currentIndex =
-          room.players.findIndex(
-            (player) =>
-              player.id ===
-              socket.id
+        const ids =
+          game
+            .activePlayerIds;
+
+        const index =
+          ids.indexOf(
+            socket.id
           );
 
         const finalTurns:
@@ -1552,19 +1958,15 @@ io.on(
         for (
           let step = 1;
           step <
-          room.players.length;
+          ids.length;
           step++
         ) {
-          const index =
-            (currentIndex +
-              step) %
-            room.players
-              .length;
-
           finalTurns.push(
-            room.players[
-              index
-            ].id
+            ids[
+              (index +
+                step) %
+                ids.length
+            ]
           );
         }
 
@@ -1649,14 +2051,158 @@ io.on(
         ) {
           callback({
             ok: false,
-            message:
-              "รอบยังไม่จบ",
           });
 
           return;
         }
 
         startRound(
+          room
+        );
+
+        callback({
+          ok: true,
+        });
+      }
+    );
+
+    // --------------------------------------------------
+    // EMOJI
+    // --------------------------------------------------
+
+    socket.on(
+      "emoji-reaction",
+      (
+        data: {
+          code: string;
+          emoji: string;
+        }
+      ) => {
+        const room =
+          rooms.get(
+            data.code
+          );
+
+        if (
+          !room ||
+          room.status ===
+            "ended"
+        ) {
+          return;
+        }
+
+        const player =
+          findPlayer(
+            room,
+            socket.id
+          );
+
+        if (!player) {
+          return;
+        }
+
+        const allowed =
+          [
+            "😂",
+            "🤣",
+            "😭",
+            "😡",
+            "😎",
+            "👏",
+            "🔥",
+            "💀",
+            "❤️",
+            "🤡",
+          ];
+
+        if (
+          !allowed.includes(
+            data.emoji
+          )
+        ) {
+          return;
+        }
+
+        // ไม่มี cooldown
+        // กดรัวได้
+
+        io.to(
+          room.code
+        ).emit(
+          "emoji-reaction",
+          {
+            id:
+              `${socket.id}-${Date.now()}-${Math.random()}`,
+
+            playerId:
+              socket.id,
+
+            name:
+              player.name,
+
+            emoji:
+              data.emoji,
+
+            seed:
+              Math.random(),
+          }
+        );
+      }
+    );
+
+    // --------------------------------------------------
+    // END GAME
+    // --------------------------------------------------
+
+    socket.on(
+      "end-game",
+      (
+        data: {
+          code: string;
+        },
+        callback
+      ) => {
+        const room =
+          rooms.get(
+            data.code
+          );
+
+        if (!room) {
+          callback({
+            ok: false,
+          });
+
+          return;
+        }
+
+        if (
+          room.hostId !==
+          socket.id
+        ) {
+          callback({
+            ok: false,
+            message:
+              "เฉพาะ Host",
+          });
+
+          return;
+        }
+
+        room.status =
+          "ended";
+
+        if (room.game) {
+          room.game.currentPlayerId =
+            null;
+        }
+
+        io.to(
+          room.code
+        ).emit(
+          "game-ended"
+        );
+
+        sendGameState(
           room
         );
 
@@ -1705,29 +2251,37 @@ io.on(
           if (
             room.game
           ) {
-            delete room.game
-              .hands[
+            const game =
+              room.game;
+
+            game.activePlayerIds =
+              game.activePlayerIds.filter(
+                (id) =>
+                  id !==
+                  socket.id
+              );
+
+            delete game.hands[
               socket.id
             ];
 
-            room.game.finalTurnsRemaining =
-              room.game.finalTurnsRemaining.filter(
+            game.finalTurnsRemaining =
+              game.finalTurnsRemaining.filter(
                 (id) =>
                   id !==
                   socket.id
               );
 
             if (
-              room.game
-                .currentPlayerId ===
+              game.currentPlayerId ===
               socket.id
             ) {
-              room.game.currentPlayerId =
-                room.players[0]
-                  ?.id ||
+              game.currentPlayerId =
+                game
+                  .activePlayerIds[0] ||
                 null;
 
-              room.game.hasDrawn =
+              game.hasDrawn =
                 false;
             }
           }
@@ -1748,8 +2302,9 @@ io.on(
             socket.id
           ) {
             room.hostId =
-              room.players[0]
-                .id;
+              room.players[
+                0
+              ].id;
           }
 
           sendGameState(
@@ -1770,8 +2325,10 @@ app.get(
   (_, res) => {
     res.json({
       ok: true,
+
       game:
-        "31 Scat Phase 2",
+        "31 Scat Phase 3",
+
       rooms:
         rooms.size,
     });
@@ -1779,7 +2336,7 @@ app.get(
 );
 
 // ======================================================
-// STATIC WEB
+// STATIC
 // ======================================================
 
 const __filename =
@@ -1817,7 +2374,7 @@ app.get(
 );
 
 // ======================================================
-// SERVER
+// START
 // ======================================================
 
 const PORT =
@@ -1831,7 +2388,7 @@ httpServer.listen(
   () => {
     console.log("");
     console.log(
-      "🃏 31 Scat Phase 2"
+      "🃏 31 Scat Phase 3"
     );
 
     console.log(
