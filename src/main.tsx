@@ -1,12 +1,20 @@
 import React, {
   useEffect,
-  useState
+  useState,
 } from "react";
 
 import ReactDOM from "react-dom/client";
-import { io, Socket } from "socket.io-client";
+
+import {
+  io,
+  Socket,
+} from "socket.io-client";
 
 import "./styles.css";
+
+// ==========================================
+// TYPES
+// ==========================================
 
 type Player = {
   id: string;
@@ -14,12 +22,21 @@ type Player = {
   totalChip: number;
 };
 
+type RoomStatus =
+  | "waiting"
+  | "playing";
+
 type Room = {
   code: string;
   hostId: string;
   multiplier: number;
+  status: RoomStatus;
   players: Player[];
 };
+
+// ==========================================
+// SOCKET
+// ==========================================
 
 const socket: Socket = io(
   import.meta.env.DEV
@@ -27,64 +44,166 @@ const socket: Socket = io(
     : undefined
 );
 
+// ==========================================
+// APP
+// ==========================================
+
 function App() {
-  const [connected, setConnected] =
-    useState(false);
+  const [
+    connected,
+    setConnected,
+  ] = useState(false);
 
-  const [name, setName] =
-    useState("");
+  const [
+    name,
+    setName,
+  ] = useState("");
 
-  const [roomCode, setRoomCode] =
-    useState("");
+  const [
+    roomCode,
+    setRoomCode,
+  ] = useState("");
 
-  const [multiplier, setMultiplier] =
-    useState(2);
+  const [
+    multiplier,
+    setMultiplier,
+  ] = useState(2);
 
-  const [room, setRoom] =
-    useState<Room | null>(null);
+  const [
+    room,
+    setRoom,
+  ] =
+    useState<Room | null>(
+      null
+    );
 
-  const [error, setError] =
-    useState("");
+  const [
+    error,
+    setError,
+  ] = useState("");
+
+  // ========================================
+  // SOCKET EVENTS
+  // ========================================
 
   useEffect(() => {
-    socket.on("connect", () => {
-      setConnected(true);
-    });
+    function handleConnect() {
+      console.log(
+        "Connected:",
+        socket.id
+      );
 
-    socket.on("disconnect", () => {
+      setConnected(true);
+    }
+
+    function handleDisconnect() {
       setConnected(false);
-    });
+    }
+
+    function handleRoomUpdate(
+      updatedRoom: Room
+    ) {
+      console.log(
+        "Room update:",
+        updatedRoom
+      );
+
+      setRoom(updatedRoom);
+    }
+
+    function handleGameStarted(
+      data: any
+    ) {
+      console.log(
+        "Game started:",
+        data
+      );
+    }
+
+    socket.on(
+      "connect",
+      handleConnect
+    );
+
+    socket.on(
+      "disconnect",
+      handleDisconnect
+    );
 
     socket.on(
       "room-update",
-      (updatedRoom: Room) => {
-        setRoom(updatedRoom);
-      }
+      handleRoomUpdate
     );
 
+    socket.on(
+      "game-started",
+      handleGameStarted
+    );
+
+    // กรณี socket connect
+    // ก่อน React render
+    if (socket.connected) {
+      setConnected(true);
+    }
+
     return () => {
-      socket.off("connect");
-      socket.off("disconnect");
-      socket.off("room-update");
+      socket.off(
+        "connect",
+        handleConnect
+      );
+
+      socket.off(
+        "disconnect",
+        handleDisconnect
+      );
+
+      socket.off(
+        "room-update",
+        handleRoomUpdate
+      );
+
+      socket.off(
+        "game-started",
+        handleGameStarted
+      );
     };
   }, []);
 
+  // ========================================
+  // CREATE ROOM
+  // ========================================
+
   function createRoom() {
     if (!name.trim()) {
-      setError("กรุณาใส่ชื่อ");
+      setError(
+        "กรุณาใส่ชื่อ"
+      );
+
+      return;
+    }
+
+    if (!connected) {
+      setError(
+        "ยังไม่เชื่อมต่อ Server"
+      );
+
       return;
     }
 
     socket.emit(
       "create-room",
       {
-        name,
-        multiplier
+        name:
+          name.trim(),
+
+        multiplier,
       },
       (response: any) => {
-        if (!response.ok) {
+        if (
+          !response?.ok
+        ) {
           setError(
-            response.message ||
+            response?.message ||
               "สร้างห้องไม่สำเร็จ"
           );
 
@@ -92,41 +211,271 @@ function App() {
         }
 
         setError("");
-        setRoom(response.room);
+
+        setRoom(
+          response.room
+        );
       }
     );
   }
 
+  // ========================================
+  // JOIN ROOM
+  // ========================================
+
   function joinRoom() {
     if (!name.trim()) {
-      setError("กรุณาใส่ชื่อ");
+      setError(
+        "กรุณาใส่ชื่อ"
+      );
+
       return;
     }
 
-    if (!roomCode.trim()) {
-      setError("กรุณาใส่ Room Code");
+    if (
+      !roomCode.trim()
+    ) {
+      setError(
+        "กรุณาใส่ Room Code"
+      );
+
+      return;
+    }
+
+    if (!connected) {
+      setError(
+        "ยังไม่เชื่อมต่อ Server"
+      );
+
       return;
     }
 
     socket.emit(
       "join-room",
       {
-        name,
-        code: roomCode
+        name:
+          name.trim(),
+
+        code:
+          roomCode
+            .trim()
+            .toUpperCase(),
       },
       (response: any) => {
-        if (!response.ok) {
-          setError(response.message);
+        if (
+          !response?.ok
+        ) {
+          setError(
+            response?.message ||
+              "เข้าห้องไม่สำเร็จ"
+          );
+
           return;
         }
 
         setError("");
-        setRoom(response.room);
+
+        setRoom(
+          response.room
+        );
       }
     );
   }
 
+  // ========================================
+  // START GAME
+  // ========================================
+
+  function startGame() {
+    if (!room) {
+      return;
+    }
+
+    setError("");
+
+    socket.emit(
+      "start-game",
+      {
+        code: room.code,
+      },
+      (response: any) => {
+        if (
+          !response?.ok
+        ) {
+          setError(
+            response?.message ||
+              "เริ่มเกมไม่สำเร็จ"
+          );
+
+          return;
+        }
+
+        console.log(
+          "Start game success"
+        );
+      }
+    );
+  }
+
+  // ========================================
+  // GAME SCREEN
+  // ========================================
+
+  if (
+    room &&
+    room.status === "playing"
+  ) {
+    return (
+      <div className="app">
+        <header>
+          <div>
+            <div className="logo">
+              🃏 31 SCAT
+            </div>
+
+            <div className="subtitle">
+              ROOM {room.code}
+            </div>
+          </div>
+
+          <div className="connection">
+            <span
+              className={
+                connected
+                  ? "dot online"
+                  : "dot"
+              }
+            />
+
+            {connected
+              ? "Connected"
+              : "Disconnected"}
+          </div>
+        </header>
+
+        <main className="room-page">
+          <div className="room-info">
+            <div>
+              ROOM CODE
+            </div>
+
+            <strong>
+              {room.code}
+            </strong>
+
+            <span>
+              CHIP{" "}
+              {
+                room.multiplier
+              }
+              ×
+            </span>
+          </div>
+
+          <section className="game-table">
+            <div className="table-title">
+              GAME STARTED
+            </div>
+
+            <div className="players">
+              {room.players.map(
+                (
+                  player
+                ) => (
+                  <div
+                    className="player"
+                    key={
+                      player.id
+                    }
+                  >
+                    <div className="avatar">
+                      {player.name
+                        .charAt(
+                          0
+                        )
+                        .toUpperCase()}
+                    </div>
+
+                    <strong>
+                      {
+                        player.name
+                      }
+                    </strong>
+
+                    {player.id ===
+                      room.hostId && (
+                      <span className="host">
+                        HOST
+                      </span>
+                    )}
+
+                    <div className="chips">
+                      {player.totalChip >
+                      0
+                        ? "+"
+                        : ""}
+
+                      {
+                        player.totalChip
+                      }{" "}
+                      CHIP
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+
+            <div
+              style={{
+                textAlign:
+                  "center",
+
+                marginTop:
+                  "10px",
+
+                fontSize:
+                  "28px",
+
+                fontWeight:
+                  "900",
+
+                color:
+                  "#e4bd60",
+              }}
+            >
+              🎮 เกมเริ่มแล้ว
+            </div>
+
+            <div
+              style={{
+                textAlign:
+                  "center",
+
+                marginTop:
+                  "10px",
+
+                color:
+                  "#91a7a0",
+              }}
+            >
+              ขั้นต่อไป:
+              แจกไพ่ 3 ใบ
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  // ========================================
+  // WAITING ROOM
+  // ========================================
+
   if (room) {
+    const isHost =
+      socket.id ===
+      room.hostId;
+
     return (
       <div className="app">
         <header>
@@ -166,7 +515,11 @@ function App() {
             </strong>
 
             <span>
-              CHIP {room.multiplier}×
+              CHIP{" "}
+              {
+                room.multiplier
+              }
+              ×
             </span>
           </div>
 
@@ -177,19 +530,27 @@ function App() {
 
             <div className="players">
               {room.players.map(
-                (player) => (
+                (
+                  player
+                ) => (
                   <div
                     className="player"
-                    key={player.id}
+                    key={
+                      player.id
+                    }
                   >
                     <div className="avatar">
                       {player.name
-                        .charAt(0)
+                        .charAt(
+                          0
+                        )
                         .toUpperCase()}
                     </div>
 
                     <strong>
-                      {player.name}
+                      {
+                        player.name
+                      }
                     </strong>
 
                     {player.id ===
@@ -200,11 +561,15 @@ function App() {
                     )}
 
                     <div className="chips">
-                      {player.totalChip > 0
+                      {player.totalChip >
+                      0
                         ? "+"
                         : ""}
-                      {player.totalChip}
-                      {" CHIP"}
+
+                      {
+                        player.totalChip
+                      }{" "}
+                      CHIP
                     </div>
                   </div>
                 )
@@ -212,19 +577,56 @@ function App() {
             </div>
 
             <div className="waiting">
-              {room.players.length} Players
+              {
+                room.players
+                  .length
+              }{" "}
+              Players
             </div>
 
-            {socket.id === room.hostId && (
-              <button className="start-button">
+            {isHost && (
+              <button
+                className="start-button"
+                onClick={
+                  startGame
+                }
+              >
                 START GAME
               </button>
+            )}
+
+            {!isHost && (
+              <div
+                style={{
+                  textAlign:
+                    "center",
+
+                  marginTop:
+                    "20px",
+
+                  color:
+                    "#91a7a0",
+                }}
+              >
+                รอ Host
+                เริ่มเกม...
+              </div>
+            )}
+
+            {error && (
+              <div className="error">
+                {error}
+              </div>
             )}
           </section>
         </main>
       </div>
     );
   }
+
+  // ========================================
+  // HOME
+  // ========================================
 
   return (
     <div className="app">
@@ -235,7 +637,8 @@ function App() {
           </div>
 
           <div className="subtitle">
-            Multiplayer Card Game
+            Multiplayer Card
+            Game
           </div>
         </div>
 
@@ -265,12 +668,17 @@ function App() {
 
           <h1>
             31
-            <span> SCAT</span>
+            <span>
+              {" "}
+              SCAT
+            </span>
           </h1>
 
           <p>
-            สร้างห้อง ส่ง Room Code
-            ให้เพื่อน แล้วเริ่มเกม
+            สร้างห้อง ส่ง
+            Room Code
+            ให้เพื่อน
+            แล้วเริ่มเกม
           </p>
         </section>
 
@@ -281,8 +689,13 @@ function App() {
 
           <input
             value={name}
-            onChange={(e) =>
-              setName(e.target.value)
+            onChange={(
+              e
+            ) =>
+              setName(
+                e.target
+                  .value
+              )
             }
             placeholder="ชื่อผู้เล่น"
           />
@@ -296,17 +709,27 @@ function App() {
           </label>
 
           <div className="multipliers">
-            {[1, 2, 5, 10].map(
+            {[
+              1,
+              2,
+              5,
+              10,
+            ].map(
               (value) => (
                 <button
-                  key={value}
+                  key={
+                    value
+                  }
                   className={
-                    multiplier === value
+                    multiplier ===
+                    value
                       ? "selected"
                       : ""
                   }
                   onClick={() =>
-                    setMultiplier(value)
+                    setMultiplier(
+                      value
+                    )
                   }
                 >
                   {value}×
@@ -317,7 +740,9 @@ function App() {
 
           <button
             className="primary"
-            onClick={createRoom}
+            onClick={
+              createRoom
+            }
           >
             CREATE ROOM
           </button>
@@ -327,9 +752,13 @@ function App() {
           </div>
 
           <input
-            value={roomCode}
+            value={
+              roomCode
+            }
             maxLength={4}
-            onChange={(e) =>
+            onChange={(
+              e
+            ) =>
               setRoomCode(
                 e.target.value.toUpperCase()
               )
@@ -339,7 +768,9 @@ function App() {
 
           <button
             className="secondary"
-            onClick={joinRoom}
+            onClick={
+              joinRoom
+            }
           >
             JOIN ROOM
           </button>
@@ -355,9 +786,15 @@ function App() {
   );
 }
 
+// ==========================================
+// RENDER
+// ==========================================
+
 ReactDOM
   .createRoot(
-    document.getElementById("root")!
+    document.getElementById(
+      "root"
+    )!
   )
   .render(
     <React.StrictMode>
