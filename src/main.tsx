@@ -52,18 +52,24 @@ type SettlementLine = {
 
 type RoundResult = {
   roundNumber: number;
+
   starterId: string;
 
   reason:
-    | "31"
     | "knock"
     | "initial-trip";
 
   scores:
-    Record<string, number>;
+    Record<
+      string,
+      number
+    >;
 
   roundNet:
-    Record<string, number>;
+    Record<
+      string,
+      number
+    >;
 
   settlements:
     SettlementLine[];
@@ -132,6 +138,9 @@ type GameState = {
 
   result:
     RoundResult | null;
+
+  emojiRemaining:
+    number;
 };
 
 type Reaction = {
@@ -140,17 +149,19 @@ type Reaction = {
   name: string;
   emoji: string;
   seed: number;
+  remaining?: number;
 };
 
 // ======================================================
 // SOCKET
 // ======================================================
 
-const socket: Socket = io(
-  import.meta.env.DEV
-    ? "http://localhost:3001"
-    : undefined
-);
+const socket: Socket =
+  io(
+    import.meta.env.DEV
+      ? "http://localhost:3001"
+      : undefined
+  );
 
 // ======================================================
 // APP
@@ -160,176 +171,219 @@ function App() {
   const [
     connected,
     setConnected,
-  ] = useState(false);
+  ] =
+    useState(false);
 
   const [
     name,
     setName,
-  ] = useState("");
+  ] =
+    useState("");
 
   const [
     roomCode,
     setRoomCode,
-  ] = useState("");
+  ] =
+    useState("");
 
   const [
     multiplier,
     setMultiplier,
-  ] = useState(2);
+  ] =
+    useState(2);
 
   const [
     room,
     setRoom,
   ] =
-    useState<Room | null>(
-      null
-    );
+    useState<
+      Room | null
+    >(null);
 
   const [
     game,
     setGame,
   ] =
-    useState<GameState | null>(
-      null
-    );
+    useState<
+      GameState | null
+    >(null);
 
   const [
     selectedCard,
     setSelectedCard,
   ] =
-    useState<string | null>(
-      null
-    );
+    useState<
+      string | null
+    >(null);
 
   const [
     error,
     setError,
-  ] = useState("");
+  ] =
+    useState("");
 
   const [
     showLedger,
     setShowLedger,
-  ] = useState(false);
+  ] =
+    useState(false);
 
   const [
     reactions,
     setReactions,
   ] =
-    useState<Reaction[]>(
-      []
-    );
+    useState<
+      Reaction[]
+    >([]);
+
+  const [
+    emojiRemaining,
+    setEmojiRemaining,
+  ] =
+    useState(10);
+
+  const [
+    localEmojiLock,
+    setLocalEmojiLock,
+  ] =
+    useState(false);
 
   // ====================================================
   // SOCKET EVENTS
   // ====================================================
 
-  useEffect(() => {
-    const onConnect = () =>
-      setConnected(true);
-
-    const onDisconnect = () =>
-      setConnected(false);
-
-    const onRoomUpdate =
-      (data: Room) => {
-        setRoom(data);
-      };
-
-    const onGameState =
-      (data: GameState) => {
-        setGame(data);
-
-        if (
-          !data.hasDrawn
-        ) {
-          setSelectedCard(
-            null
+  useEffect(
+    () => {
+      const onConnect =
+        () =>
+          setConnected(
+            true
           );
-        }
-      };
 
-    const onEmoji =
-      (reaction: Reaction) => {
-        setReactions(
-          (old) => [
-            ...old,
-            reaction,
-          ]
-        );
+      const onDisconnect =
+        () =>
+          setConnected(
+            false
+          );
 
-        setTimeout(
-          () => {
-            setReactions(
-              (old) =>
-                old.filter(
-                  (item) =>
-                    item.id !==
-                    reaction.id
-                )
+      const onRoomUpdate =
+        (data: Room) => {
+          setRoom(
+            data
+          );
+        };
+
+      const onGameState =
+        (
+          data: GameState
+        ) => {
+          setGame(
+            data
+          );
+
+          setEmojiRemaining(
+            data.emojiRemaining ??
+              10
+          );
+
+          if (
+            !data.hasDrawn
+          ) {
+            setSelectedCard(
+              null
             );
-          },
-          2200
-        );
-      };
+          }
+        };
 
-    socket.on(
-      "connect",
-      onConnect
-    );
+      const onEmoji =
+        (
+          reaction:
+            Reaction
+        ) => {
+          setReactions(
+            (old) => [
+              ...old,
+              reaction,
+            ]
+          );
 
-    socket.on(
-      "disconnect",
-      onDisconnect
-    );
+          setTimeout(
+            () => {
+              setReactions(
+                (old) =>
+                  old.filter(
+                    (item) =>
+                      item.id !==
+                      reaction.id
+                  )
+              );
+            },
+            2300
+          );
+        };
 
-    socket.on(
-      "room-update",
-      onRoomUpdate
-    );
-
-    socket.on(
-      "game-state",
-      onGameState
-    );
-
-    socket.on(
-      "emoji-reaction",
-      onEmoji
-    );
-
-    if (
-      socket.connected
-    ) {
-      setConnected(true);
-    }
-
-    return () => {
-      socket.off(
+      socket.on(
         "connect",
         onConnect
       );
 
-      socket.off(
+      socket.on(
         "disconnect",
         onDisconnect
       );
 
-      socket.off(
+      socket.on(
         "room-update",
         onRoomUpdate
       );
 
-      socket.off(
+      socket.on(
         "game-state",
         onGameState
       );
 
-      socket.off(
+      socket.on(
         "emoji-reaction",
         onEmoji
       );
-    };
-  }, []);
+
+      if (
+        socket.connected
+      ) {
+        setConnected(
+          true
+        );
+      }
+
+      return () => {
+        socket.off(
+          "connect",
+          onConnect
+        );
+
+        socket.off(
+          "disconnect",
+          onDisconnect
+        );
+
+        socket.off(
+          "room-update",
+          onRoomUpdate
+        );
+
+        socket.off(
+          "game-state",
+          onGameState
+        );
+
+        socket.off(
+          "emoji-reaction",
+          onEmoji
+        );
+      };
+    },
+    []
+  );
 
   // ====================================================
   // HELPERS
@@ -343,8 +397,16 @@ function App() {
     myId;
 
   const myTurn =
-    game?.currentPlayerId ===
+    game
+      ?.currentPlayerId ===
     myId;
+
+  const myPlayer =
+    room?.players.find(
+      (player) =>
+        player.id ===
+        myId
+    );
 
   function playerName(
     id: string
@@ -352,75 +414,97 @@ function App() {
     return (
       room?.players.find(
         (player) =>
-          player.id === id
+          player.id ===
+          id
       )?.name ||
       "Player"
     );
   }
 
-  const myPlayer =
-    room?.players.find(
-      (player) =>
-        player.id === myId
+  const previewScore =
+    useMemo(
+      () => {
+        if (
+          !game ||
+          game.hand
+            .length !== 3
+        ) {
+          return "-";
+        }
+
+        const hand =
+          game.hand;
+
+        const trip =
+          hand.every(
+            (card) =>
+              card.rank ===
+              hand[0].rank
+          );
+
+        if (
+          trip
+        ) {
+          return 30.5;
+        }
+
+        const totals:
+          Record<
+            Suit,
+            number
+          > = {
+          "♠": 0,
+          "♥": 0,
+          "♦": 0,
+          "♣": 0,
+        };
+
+        for (
+          const card
+          of hand
+        ) {
+          totals[
+            card.suit
+          ] +=
+            card.value;
+        }
+
+        return Math.max(
+          ...Object.values(
+            totals
+          )
+        );
+      },
+      [game]
     );
 
-  const previewScore =
-    useMemo(() => {
-      if (
-        !game ||
-        game.hand.length !==
-          3
-      ) {
-        return "-";
-      }
+  // ====================================================
+  // CALLBACK
+  // ====================================================
 
-      const hand =
-        game.hand;
-
-      const trip =
-        hand.every(
-          (card) =>
-            card.rank ===
-            hand[0].rank
-        );
-
-      if (trip) {
-        return 30.5;
-      }
-
-      const totals:
-        Record<
-          Suit,
-          number
-        > = {
-        "♠": 0,
-        "♥": 0,
-        "♦": 0,
-        "♣": 0,
-      };
-
-      for (
-        const card
-        of hand
-      ) {
-        totals[
-          card.suit
-        ] += card.value;
-      }
-
-      return Math.max(
-        ...Object.values(
-          totals
-        )
+  function callbackError(
+    response: any
+  ) {
+    if (
+      !response?.ok
+    ) {
+      setError(
+        response?.message ||
+          "เกิดข้อผิดพลาด"
       );
-    }, [game]);
+    } else {
+      setError("");
+    }
+  }
 
   // ====================================================
-  // ACTIONS
+  // ROOM ACTIONS
   // ====================================================
 
   function createRoom() {
-    if (!name.trim()) {
+    if (
+      !name.trim()
+    ) {
       setError(
         "กรุณาใส่ชื่อ"
       );
@@ -436,7 +520,9 @@ function App() {
 
         multiplier,
       },
-      (response: any) => {
+      (
+        response: any
+      ) => {
         if (
           !response?.ok
         ) {
@@ -480,7 +566,9 @@ function App() {
             .trim()
             .toUpperCase(),
       },
-      (response: any) => {
+      (
+        response: any
+      ) => {
         if (
           !response?.ok
         ) {
@@ -502,7 +590,11 @@ function App() {
   }
 
   function startGame() {
-    if (!room) return;
+    if (
+      !room
+    ) {
+      return;
+    }
 
     socket.emit(
       "start-game",
@@ -514,8 +606,33 @@ function App() {
     );
   }
 
+  function nextRound() {
+    if (
+      !room
+    ) {
+      return;
+    }
+
+    socket.emit(
+      "next-round",
+      {
+        code:
+          room.code,
+      },
+      callbackError
+    );
+  }
+
+  // ====================================================
+  // CARD ACTIONS
+  // ====================================================
+
   function drawDeck() {
-    if (!room) return;
+    if (
+      !room
+    ) {
+      return;
+    }
 
     socket.emit(
       "draw-deck",
@@ -528,7 +645,11 @@ function App() {
   }
 
   function drawDiscard() {
-    if (!room) return;
+    if (
+      !room
+    ) {
+      return;
+    }
 
     socket.emit(
       "draw-discard",
@@ -557,12 +678,30 @@ function App() {
         cardId:
           selectedCard,
       },
-      callbackError
+      (
+        response: any
+      ) => {
+        callbackError(
+          response
+        );
+
+        if (
+          response?.ok
+        ) {
+          setSelectedCard(
+            null
+          );
+        }
+      }
     );
   }
 
   function knock() {
-    if (!room) return;
+    if (
+      !room
+    ) {
+      return;
+    }
 
     socket.emit(
       "knock",
@@ -574,23 +713,25 @@ function App() {
     );
   }
 
-  function nextRound() {
-    if (!room) return;
-
-    socket.emit(
-      "next-round",
-      {
-        code:
-          room.code,
-      },
-      callbackError
-    );
-  }
+  // ====================================================
+  // EMOJI
+  // ====================================================
 
   function sendEmoji(
     emoji: string
   ) {
-    if (!room) return;
+    if (
+      !room ||
+      localEmojiLock ||
+      emojiRemaining <=
+        0
+    ) {
+      return;
+    }
+
+    setLocalEmojiLock(
+      true
+    );
 
     socket.emit(
       "emoji-reaction",
@@ -599,19 +740,63 @@ function App() {
           room.code,
 
         emoji,
+      },
+      (
+        response: any
+      ) => {
+        if (
+          response
+            ?.remaining !==
+          undefined
+        ) {
+          setEmojiRemaining(
+            response.remaining
+          );
+        }
+
+        if (
+          !response?.ok &&
+          response
+            ?.message !==
+            "กดเร็วเกินไป"
+        ) {
+          setError(
+            response?.message ||
+              ""
+          );
+        }
       }
+    );
+
+    setTimeout(
+      () => {
+        setLocalEmojiLock(
+          false
+        );
+      },
+      400
     );
   }
 
+  // ====================================================
+  // END GAME
+  // ====================================================
+
   function endGame() {
-    if (!room) return;
+    if (
+      !room
+    ) {
+      return;
+    }
 
     const yes =
       window.confirm(
-        "ต้องการจบเกมหรือไม่?\n\nรอบที่กำลังเล่นอยู่จะไม่ถูกคิดคะแนน ถ้ายังไม่จบรอบ"
+        "ต้องการจบเกมหรือไม่?\n\nถ้ารอบปัจจุบันยังไม่จบ จะไม่นำรอบนี้มาคิด Chip"
       );
 
-    if (!yes) {
+    if (
+      !yes
+    ) {
       return;
     }
 
@@ -625,23 +810,8 @@ function App() {
     );
   }
 
-  function callbackError(
-    response: any
-  ) {
-    if (
-      !response?.ok
-    ) {
-      setError(
-        response?.message ||
-          "เกิดข้อผิดพลาด"
-      );
-    } else {
-      setError("");
-    }
-  }
-
   // ====================================================
-  // CARD
+  // CARD VIEW
   // ====================================================
 
   function CardView({
@@ -649,11 +819,14 @@ function App() {
     selectable = false,
   }: {
     card: Card;
-    selectable?: boolean;
+    selectable?:
+      boolean;
   }) {
     const red =
-      card.suit === "♥" ||
-      card.suit === "♦";
+      card.suit ===
+        "♥" ||
+      card.suit ===
+        "♦";
 
     return (
       <button
@@ -677,7 +850,9 @@ function App() {
           !selectable
         }
         onClick={() => {
-          if (selectable) {
+          if (
+            selectable
+          ) {
             setSelectedCard(
               card.id
             );
@@ -703,27 +878,44 @@ function App() {
     return (
       <div className="emoji-layer">
         {reactions.map(
-          (reaction) => {
+          (
+            reaction
+          ) => {
+            const lane =
+              Math.floor(
+                reaction.seed *
+                  5
+              );
+
             const x =
-              (reaction.seed -
-                0.5) *
-              320;
+              18 +
+              lane * 38;
+
+            const drift =
+              20 +
+              reaction.seed *
+                90;
 
             const rotation =
-              (reaction.seed -
-                0.5) *
-              30;
+              (
+                reaction.seed -
+                0.5
+              ) *
+              24;
 
             return (
               <div
                 key={
                   reaction.id
                 }
-                className="emoji-pop"
+                className="emoji-pop-left"
                 style={
                   {
-                    "--emoji-x":
+                    "--emoji-left":
                       `${x}px`,
+
+                    "--emoji-drift":
+                      `${drift}px`,
 
                     "--emoji-rotation":
                       `${rotation}deg`,
@@ -768,21 +960,33 @@ function App() {
     ];
 
     return (
-      <div className="emoji-bar">
-        {emojis.map(
-          (emoji) => (
-            <button
-              key={emoji}
-              onClick={() =>
-                sendEmoji(
-                  emoji
-                )
-              }
-            >
-              {emoji}
-            </button>
-          )
-        )}
+      <div className="emoji-section">
+        <div className="emoji-counter">
+          Emoji{" "}
+          {emojiRemaining}
+          /10
+        </div>
+
+        <div className="emoji-bar">
+          {emojis.map(
+            (emoji) => (
+              <button
+                key={emoji}
+                disabled={
+                  emojiRemaining <=
+                  0
+                }
+                onClick={() =>
+                  sendEmoji(
+                    emoji
+                  )
+                }
+              >
+                {emoji}
+              </button>
+            )
+          )}
+        </div>
       </div>
     );
   }
@@ -823,15 +1027,21 @@ function App() {
           </h2>
 
           <div className="my-total">
-            {myPlayer?.name}
-            {" "}
+            <span>
+              {myPlayer?.name}
+            </span>
+
             <strong>
-              {myPlayer &&
-              myPlayer.totalChip >
+              {(
+                myPlayer
+                  ?.totalChip ||
                 0
+              ) > 0
                 ? "+"
                 : ""}
-              {myPlayer?.totalChip ||
+
+              {myPlayer
+                ?.totalChip ||
                 0}
             </strong>
           </div>
@@ -904,7 +1114,7 @@ function App() {
           </div>
 
           <h3>
-            ตารางคะแนนทั้งหมด
+            ตารางคะแนนรวม
           </h3>
 
           <div className="total-board">
@@ -926,7 +1136,8 @@ function App() {
                     className="total-row"
                   >
                     <span>
-                      #{index +
+                      #
+                      {index +
                         1}{" "}
                       {
                         player.name
@@ -948,6 +1159,7 @@ function App() {
                       0
                         ? "+"
                         : ""}
+
                       {
                         player.totalChip
                       }
@@ -962,7 +1174,7 @@ function App() {
   }
 
   // ====================================================
-  // FINAL SUMMARY
+  // GAME ENDED
   // ====================================================
 
   if (
@@ -1008,7 +1220,9 @@ function App() {
             b.id
           ] || 0;
 
-        if (value > 0) {
+        if (
+          value > 0
+        ) {
           pairRows.push({
             from:
               b.name,
@@ -1019,9 +1233,9 @@ function App() {
             amount:
               value,
           });
-        }
-
-        if (value < 0) {
+        } else if (
+          value < 0
+        ) {
           pairRows.push({
             from:
               a.name,
@@ -1084,13 +1298,11 @@ function App() {
                       1}
                   </div>
 
-                  <div>
-                    <strong>
-                      {
-                        player.name
-                      }
-                    </strong>
-                  </div>
+                  <strong>
+                    {
+                      player.name
+                    }
+                  </strong>
 
                   <b
                     className={
@@ -1107,6 +1319,7 @@ function App() {
                     0
                       ? "+"
                       : ""}
+
                     {
                       player.totalChip
                     }{" "}
@@ -1125,7 +1338,7 @@ function App() {
             {pairRows.length ===
             0 ? (
               <p>
-                ไม่มีหนี้ระหว่างผู้เล่น
+                ไม่มียอดค้างระหว่างผู้เล่น
               </p>
             ) : (
               pairRows.map(
@@ -1173,7 +1386,9 @@ function App() {
   // HOME
   // ====================================================
 
-  if (!room) {
+  if (
+    !room
+  ) {
     return (
       <div className="app">
         <header>
@@ -1183,8 +1398,7 @@ function App() {
             </div>
 
             <div className="subtitle">
-              Multiplayer
-              Card Game
+              Multiplayer Card Game
             </div>
           </div>
 
@@ -1218,9 +1432,7 @@ function App() {
             </h1>
 
             <p>
-              สร้างห้อง
-              แล้วส่ง Room
-              Code ให้เพื่อน
+              สร้างห้อง แล้วส่ง Room Code ให้เพื่อน
             </p>
           </section>
 
@@ -1230,12 +1442,15 @@ function App() {
             </label>
 
             <input
-              value={name}
+              value={
+                name
+              }
               onChange={(
-                e
+                event
               ) =>
                 setName(
-                  e.target
+                  event
+                    .target
                     .value
                 )
               }
@@ -1293,12 +1508,14 @@ function App() {
               value={
                 roomCode
               }
-              maxLength={4}
+              maxLength={
+                4
+              }
               onChange={(
-                e
+                event
               ) =>
                 setRoomCode(
-                  e.target.value.toUpperCase()
+                  event.target.value.toUpperCase()
                 )
               }
               placeholder="ROOM CODE"
@@ -1315,7 +1532,9 @@ function App() {
 
             {error && (
               <div className="error">
-                {error}
+                {
+                  error
+                }
               </div>
             )}
           </section>
@@ -1345,7 +1564,9 @@ function App() {
 
             <div className="subtitle">
               ROOM{" "}
-              {room.code}
+              {
+                room.code
+              }
             </div>
           </div>
 
@@ -1366,7 +1587,9 @@ function App() {
             ROOM CODE
 
             <strong>
-              {room.code}
+              {
+                room.code
+              }
             </strong>
 
             <span>
@@ -1385,9 +1608,7 @@ function App() {
 
             <div className="players">
               {room.players.map(
-                (
-                  player
-                ) => (
+                (player) => (
                   <div
                     className="player"
                     key={
@@ -1395,7 +1616,11 @@ function App() {
                     }
                   >
                     <div className="avatar">
-                      {player.name[0].toUpperCase()}
+                      {player.name
+                        .charAt(
+                          0
+                        )
+                        .toUpperCase()}
                     </div>
 
                     <strong>
@@ -1433,8 +1658,7 @@ function App() {
               </button>
             ) : (
               <div className="waiting">
-                รอ Host
-                เริ่มเกม
+                รอ Host เริ่มเกม
               </div>
             )}
           </section>
@@ -1504,15 +1728,15 @@ function App() {
 
           <div className="result-grid">
             {room.players.map(
-              (
-                player
-              ) => {
+              (player) => {
                 const score =
                   game.result!
                     .scores[
                     player.id
                   ];
 
+                // คนเข้ากลางรอบ
+                // จะไม่มี score
                 if (
                   score ===
                   undefined
@@ -1524,20 +1748,26 @@ function App() {
                         player.id
                       }
                     >
-                      <strong>
+                      <div className="avatar">
+                        {player.name
+                          .charAt(
+                            0
+                          )
+                          .toUpperCase()}
+                      </div>
+
+                      <h3>
                         {
                           player.name
                         }
-                      </strong>
+                      </h3>
 
                       <div className="waiting-next">
-                        JOINED
-                        MID-ROUND
+                        WAITING NEXT ROUND
                       </div>
 
                       <small>
-                        PLAY NEXT
-                        ROUND
+                        ไม่คิด Chip รอบนี้
                       </small>
                     </div>
                   );
@@ -1557,7 +1787,11 @@ function App() {
                     }
                   >
                     <div className="avatar">
-                      {player.name[0].toUpperCase()}
+                      {player.name
+                        .charAt(
+                          0
+                        )
+                        .toUpperCase()}
                     </div>
 
                     <h3>
@@ -1581,10 +1815,15 @@ function App() {
                           : ""
                       }
                     >
-                      {net > 0
+                      {net >
+                      0
                         ? "+"
                         : ""}
-                      {net} CHIP
+
+                      {
+                        net
+                      }{" "}
+                      CHIP
                     </div>
 
                     <small>
@@ -1597,10 +1836,6 @@ function App() {
                 );
               }
             )}
-          </div>
-
-          <div className="starter-next">
-            รอบถัดไป ระบบจะเลือกคนเริ่มจากคะแนนรอบนี้
           </div>
 
           <EmojiBar />
@@ -1616,8 +1851,15 @@ function App() {
             </button>
           ) : (
             <div className="waiting">
-              รอ Host
-              เริ่มรอบต่อไป
+              รอ Host เริ่มรอบต่อไป
+            </div>
+          )}
+
+          {error && (
+            <div className="error">
+              {
+                error
+              }
             </div>
           )}
         </main>
@@ -1643,9 +1885,10 @@ function App() {
 
           <div className="subtitle">
             ROOM{" "}
-            {room.code}
-            {" · "}
-            ROUND{" "}
+            {
+              room.code
+            }{" "}
+            · ROUND{" "}
             {
               game.roundNumber
             }
@@ -1681,8 +1924,7 @@ function App() {
         {game.phase ===
           "final-round" && (
           <div className="final-banner">
-            🔔 FINAL ROUND —
-            {" "}
+            🔔 FINAL ROUND —{" "}
             {playerName(
               game.knockedBy ||
                 ""
@@ -1693,16 +1935,13 @@ function App() {
 
         {!game.activeInRound && (
           <div className="join-midround-banner">
-            👀 คุณเข้ามาระหว่างรอบ
-            — สามารถดูเกมและส่ง Emoji ได้
-            และจะเริ่มเล่นในรอบถัดไป
+            👀 คุณเข้ามาระหว่างรอบ — รอเล่นในรอบถัดไป
           </div>
         )}
 
         <section className="real-table">
           <div className="starter-display">
-            STARTER:
-            {" "}
+            STARTER:{" "}
             <strong>
               {playerName(
                 game.starterId
@@ -1712,9 +1951,7 @@ function App() {
 
           <div className="opponents">
             {game.tablePlayers.map(
-              (
-                player
-              ) => (
+              (player) => (
                 <div
                   className={[
                     "opponent",
@@ -1822,7 +2059,9 @@ function App() {
                   }
                 />
               ) : (
-                "EMPTY"
+                <div>
+                  EMPTY
+                </div>
               )}
 
               <small>
@@ -1891,6 +2130,9 @@ function App() {
 
                       <button
                         className="action draw"
+                        disabled={
+                          !game.topDiscard
+                        }
                         onClick={
                           drawDiscard
                         }
@@ -1950,7 +2192,9 @@ function App() {
 
         {error && (
           <div className="error">
-            {error}
+            {
+              error
+            }
           </div>
         )}
       </main>
