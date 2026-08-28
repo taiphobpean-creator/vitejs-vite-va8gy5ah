@@ -2679,17 +2679,19 @@ function App() {
         <main className="game-page">
 
           {game.phase ===
-            "final-round" && (
-            <div className="final-banner">
-              🔔 FINAL ROUND —{" "}
-              {playerName(
-                game.knockedBy ||
-                  ""
-              )}{" "}
-              KNOCKED
-            </div>
-          )}
+  "final-round" && (
+  <div className="final-banner">
+    ⚠️ FINAL ROUND ⚠️
+    <br />
 
+    <span>
+      {playerName(
+        game.knockedBy || ""
+      )}{" "}
+      KNOCKED
+    </span>
+  </div>
+)}
           {!game.activeInRound && (
             <div className="join-midround-banner">
               👀 คุณเข้ามาระหว่างรอบ — รอเล่นในรอบถัดไป
