@@ -3,9 +3,11 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "concurrently \"vite --host 0.0.0.0\" \"tsx server/index.ts\""
-  },
+ "scripts": {
+  "dev": "concurrently \"vite --host 0.0.0.0\" \"tsx server/index.ts\"",
+  "build": "vite build",
+  "start": "tsx server/index.ts"
+}
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "express": "^4.21.2",
