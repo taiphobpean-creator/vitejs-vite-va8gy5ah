@@ -22,7 +22,9 @@ type Room = {
 };
 
 const socket: Socket = io(
-  "http://localhost:3001"
+  import.meta.env.DEV
+    ? "http://localhost:3001"
+    : undefined
 );
 
 function App() {
