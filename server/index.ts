@@ -1,6 +1,8 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import path from "path";
+import { fileURLToPath } from "url";
 
 type Player = {
   id: string;
@@ -160,8 +162,19 @@ app.get('/health', (_, res) => {
     game: '31 Scat',
   });
 });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const PORT = 3001;
+const distPath = path.join(__dirname, "../dist");
+
+app.use(express.static(distPath));
+
+app.get("*", (_, res) => {
+  res.sendFile(
+    path.join(distPath, "index.html")
+  );
+});
+const PORT = Number(process.env.PORT) || 3001;
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('');
