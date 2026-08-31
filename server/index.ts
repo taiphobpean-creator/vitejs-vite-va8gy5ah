@@ -11,8 +11,8 @@ import crypto from "crypto";
 
 const RECONNECT_GRACE_MS = 5 * 60 * 1000;
 
-const EMOJI_COOLDOWN_MS = 400;
-const EMOJI_MAX_PER_ROUND = 10;
+const EMOJI_COOLDOWN_MS = 45;
+const EMOJI_MAX_PER_ROUND = 20;
 
 const MAX_CHAT_MESSAGES = 50;
 const MAX_CHAT_LENGTH = 200;
